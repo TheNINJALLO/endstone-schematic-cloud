@@ -1,0 +1,145 @@
+[database]
+# The database can be hosted anywhere reachable by the server. It does not need
+# to be inside the Endstone or plugin directories.
+host = "127.0.0.1"
+port = 3306
+user = "schematics"
+password = "change-me"
+database = "ninjos_schematics"
+namespace = "global"
+table_prefix = "ninjos_"
+connect_timeout_seconds = 10
+read_timeout_seconds = 120
+write_timeout_seconds = 120
+# Payloads above inline_payload_max_mb are stored in packet-safe rows instead of
+# one giant MySQL packet. Keep payload_chunk_size_mb below MEDIUMBLOB's 16 MiB limit.
+payload_chunk_size_mb = 2
+inline_payload_max_mb = 2
+retry_attempts = 3
+retry_backoff_seconds = 2.0
+auto_create_schema = true
+# Enables the irreversible "Remove from MySQL" action after confirmation.
+hard_delete_enabled = true
+ssl_ca = ""
+
+[server]
+# Give every connected server a distinct ID for audit metadata.
+server_id = "server-1"
+
+[disk]
+# Cloud schematics can be exported as exact native NSCM payloads. Relative paths are
+# placed below the plugin data folder. An absolute path such as
+# /home/container/schematic_backups stores them outside the plugins folder.
+enabled = true
+directory = "schematics"
+extension = ".nscm"
+auto_create_directory = true
+write_metadata_sidecar = true
+overwrite_cloud_exports = true
+max_file_size_mb = 512
+
+[worldedit]
+# Converts cloud blueprints to Sponge Schematic v3 (.schem). The same file can
+# be loaded by modern WorldEdit and by Amulet's Sponge Schem format wrapper.
+enabled = true
+directory = "worldedit_schematics"
+# Java 1.21.11 data version. Newer WorldEdit builds can data-fix it forward.
+# Change this when targeting a specific newer Java release.
+java_data_version = 4671
+overwrite_exports = true
+write_conversion_report = true
+max_file_size_mb = 1024
+
+[access]
+# Only server operators or players carrying this scoreboard tag may use any
+# command, form, tool, preview, save, load, paste, delete, undo, or redo action.
+architect_tag = "architect"
+denied_message = "Only server operators and players with the architect tag can use Ninj-OS Schematics."
+
+[performance]
+# World API calls stay on the main server thread and are spread over ticks.
+scan_blocks_per_tick = 2500
+paste_blocks_per_tick = 1200
+# Hard wall-clock guard for paste/undo/redo work on the main server thread. The
+# lower limit wins: a tick stops at this time or paste_blocks_per_tick.
+paste_time_budget_ms = 10
+max_blocks_per_schematic = 2000000
+worker_threads = 2
+completion_callbacks_per_tick = 32
+compression_level = 6
+apply_physics = false
+skip_unchanged_blocks = true
+# Every source/destination chunk is held by a plugin-owned ticket before it is read or written.
+# Newer Endstone builds use load_chunk(); older 0.11 builds fall back to temporary ticking areas.
+auto_load_missing_chunks = true
+chunk_load_timeout_ticks = 1200
+# Wait after a chunk first reports loaded before scanning or placing blocks.
+chunk_stabilize_ticks = 4
+# A save region is rolled back and rescanned if its chunk drops during the scan.
+max_chunk_retries = 3
+# Compatibility fallback for Endstone 0.11 builds without load_chunk/is_chunk_loaded.
+legacy_tickingarea_fallback = true
+legacy_tickingarea_preload = true
+legacy_tickingarea_prefix = "njs_schem"
+# Bedrock allows at most 10 ticking areas per world; leave room for administrator areas.
+legacy_tickingarea_max_active = 8
+# Read blocks back after placement and stop instead of silently accepting missing blocks.
+verify_paste_writes = true
+# Zero means the first unverifiable/failed block stops the paste and preserves partial undo.
+max_paste_failures = 0
+progress_message_interval_ticks = 40
+
+[streaming]
+# Prevents large schematics from accumulating several whole-payload copies in RAM.
+enabled = true
+# Record buffers stay in memory until this size, then spill into temp_directory.
+memory_spill_threshold_mb = 8
+# Paste planning groups only this many records at once before flushing to disk.
+plan_batch_records = 32768
+# Relative paths are stored below the plugin data folder. Use an absolute path to
+# place streaming work on a larger/faster volume.
+temp_directory = "streaming_work"
+max_temp_workspace_mb = 16384
+minimum_free_disk_mb = 1024
+cleanup_orphans_on_startup = true
+
+[schematics]
+include_air_default = true
+allow_overwrite_default = false
+
+[placement]
+# A schematic can reference a custom block whose behavior pack is not installed
+# on the destination server. Options: skip, air, fallback, abort.
+missing_block_policy = "skip"
+missing_block_fallback = "minecraft:stone"
+missing_block_report_limit = 20
+
+[preview]
+enabled = true
+particle = "ninjos:placement_outline"
+points_per_edge = 12
+refresh_ticks = 10
+duration_seconds = 90
+# Complete selections are outlined separately from placement previews.
+selection_enabled = true
+selection_particle = "ninjos:selection_outline"
+selection_points_per_edge = 12
+
+[history]
+# Undo/redo history uses compact palettes and spillable record streams, and is
+# cleared on restart. Only blocks actually changed by a paste are recorded.
+enabled = true
+max_operations_per_player = 5
+max_blocks_per_operation = 2000000
+max_total_blocks_per_player = 2000000
+
+[tools]
+selector = "ninjos:schem_selector"
+placer = "ninjos:schem_placer"
+rotator = "ninjos:schem_rotator"
+tablet = "ninjos:schem_tablet"
+undo = "ninjos:schem_undo"
+redo = "ninjos:schem_redo"
+confirm = "ninjos:schem_confirm"
+# Suppresses duplicate Bedrock interaction events from one physical click.
+interaction_debounce_ms = 450

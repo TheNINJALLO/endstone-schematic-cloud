@@ -1,0 +1,32 @@
+{
+  "format_version": "1.26.0",
+  "minecraft:item": {
+    "description": {
+      "identifier": "ninjos:schem_tablet",
+      "menu_category": {
+        "category": "equipment",
+        "group": "minecraft:itemGroup.name.tools"
+      }
+    },
+    "components": {
+      "minecraft:display_name": {
+        "value": "Ninj-OS Cloud Tablet"
+      },
+      "minecraft:icon": {
+        "textures": {
+          "default": "schem_tablet"
+        }
+      },
+      "minecraft:max_stack_size": 1,
+      "minecraft:hand_equipped": true,
+      "minecraft:allow_off_hand": false,
+      "minecraft:glint": true,
+      "minecraft:hover_text_color": "green",
+      "minecraft:interact_button": "Open Schematic Cloud",
+      "minecraft:cooldown": {
+        "category": "ninjos_schem_tablet",
+        "duration": 0.2
+      }
+    }
+  }
+}

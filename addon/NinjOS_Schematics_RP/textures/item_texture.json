@@ -1,0 +1,27 @@
+{
+  "resource_pack_name": "ninjos_schematic_tools",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "schem_selector": {
+      "textures": "textures/items/schem_selector"
+    },
+    "schem_placer": {
+      "textures": "textures/items/schem_placer"
+    },
+    "schem_rotator": {
+      "textures": "textures/items/schem_rotator"
+    },
+    "schem_tablet": {
+      "textures": "textures/items/schem_tablet"
+    },
+    "schem_undo": {
+      "textures": "textures/items/schem_undo"
+    },
+    "schem_redo": {
+      "textures": "textures/items/schem_redo"
+    },
+    "schem_confirm": {
+      "textures": "textures/items/schem_confirm"
+    }
+  }
+}

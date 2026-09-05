@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endstone-ninjos-schematics"
+version = "1.6.1"
+description = "Shared Endstone schematic library with bounded-memory streaming, packet-safe MySQL, verified chunks, undo, disk, and Sponge v3 export"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Ninj-OS"}]
+dependencies = ["PyMySQL>=1.1.1,<2", "tomlkit>=0.12,<1"]
+keywords = ["endstone", "minecraft", "bedrock", "schematic", "mysql", "worldedit", "amulet", "sponge"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+
+[project.entry-points."endstone"]
+ninjos-schematics = "endstone_ninjos_schematics:NinjOSSchematicsPlugin"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+endstone_ninjos_schematics = ["config.toml"]
