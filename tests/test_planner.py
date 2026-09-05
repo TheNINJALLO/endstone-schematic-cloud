@@ -37,6 +37,7 @@ class PlannerTests(unittest.TestCase):
             header={"size": [20, 1, 2], "block_count": 2},
             palette=[{"type": "minecraft:oak_stairs", "states": {"weirdo_direction": 3}}],
             records=bytes(records),
+            block_entities={(19, 0, 0): {"schema": 1}},
         )
         plan = prepare_paste_plan(schematic, BlockPos(15, 64, 15), 90)
         self.assertEqual(plan.size, (2, 1, 20))
@@ -48,6 +49,7 @@ class PlannerTests(unittest.TestCase):
             [(1, 0, 0), (1, 0, 19)],
         )
         self.assertEqual(plan.palette[0]["states"]["weirdo_direction"], 0)
+        self.assertEqual(plan.block_entities, {(1, 0, 19): {"schema": 1}})
 
 
 if __name__ == "__main__":

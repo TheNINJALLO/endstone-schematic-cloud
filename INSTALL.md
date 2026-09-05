@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.6.1 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.7.0 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.6.1-py3-none-any.whl
+endstone_ninjos_schematics-1.7.0-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,8 +23,31 @@ endstone_ninjos_schematics-1.6.1-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.6.1 build=large-paste-watchdog-safety-20260904
+Enabled v1.7.0 build=blockdata-nscm-v2-20260904
 ```
+
+## Optional BlockData retention
+
+To preserve supported block-entity NBT and container inventories, install the native plugin and matching platform-specific CPython bridge from one [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api/releases) release bundle. That bundle must match the running BDS and Endstone versions exactly.
+
+After a full restart, startup should report the BlockData API version and adapter. Confirm in game:
+
+```text
+/schem status
+```
+
+The generated configuration receives:
+
+```toml
+[blockdata]
+enabled = true
+strict_restore = true
+max_uncompressed_mb = 64
+```
+
+`strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
+
+Existing NSCM v1 rows remain readable. v1.7.0 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 
@@ -50,7 +73,7 @@ The directory may temporarily contain raw save records, downloaded compressed pa
 
 ## Capacity planning
 
-A full-volume schematic record uses 16 bytes per block. v1.6.0 keeps that bulk on disk instead of multiplying it in RAM, but the temporary volume still needs enough free space.
+A full-volume schematic record uses 16 bytes per block. The streaming pipeline keeps that bulk on disk instead of multiplying it in RAM, but the temporary volume still needs enough free space.
 
 Approximate upper bounds:
 
@@ -101,4 +124,4 @@ Packet-safe MySQL payload rows, retry handling, chunk residency verification, mi
 
 ## Add-on
 
-The Bedrock add-on did not change. Upgrading from v1.1.0 or newer only requires replacing the plugin wheel.
+The Bedrock add-on did not change. Upgrading from v1.1.0 or newer requires replacing the schematic plugin wheel; BlockData retention additionally requires its exact native plugin and bridge bundle.

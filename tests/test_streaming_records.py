@@ -9,7 +9,7 @@ from endstone_ninjos_schematics.codec import (
 )
 from endstone_ninjos_schematics.models import BlockPos, DecodedSchematic
 from endstone_ninjos_schematics.planner import prepare_paste_plan, prepare_streaming_paste_plan
-from endstone_ninjos_schematics.record_store import RecordSource, SpillRecordBuffer
+from endstone_ninjos_schematics.record_store import SpillRecordBuffer
 
 
 def factory(tmp_path: Path, threshold: int = 64):
@@ -55,6 +55,17 @@ def test_streaming_codec_round_trip_uses_file_backed_records(tmp_path):
         source,
         payload_path,
         6,
+        block_entities={
+            (99, 49, 79): {
+                "schema": 1,
+                "actor_type": "minecraft:chest",
+                "canonical_nbt": True,
+                "is_container": True,
+                "container_size": 27,
+                "nbt": {},
+                "inventory": [],
+            }
+        },
     )
     decoded = decode_schematic_file(
         payload_path,
@@ -64,6 +75,7 @@ def test_streaming_codec_round_trip_uses_file_backed_records(tmp_path):
     )
     assert decoded.block_count == count
     assert decoded.records.is_file_backed
+    assert (99, 49, 79) in decoded.block_entities
     assert list(iter_records(decoded.records, 49_999, 1)) == [(99, 49, 79, 1)]
     source.close()
     decoded.records.close()

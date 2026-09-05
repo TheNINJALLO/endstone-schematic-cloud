@@ -66,6 +66,7 @@ class DecodedSchematic:
     header: dict[str, Any]
     palette: list[dict[str, Any]]
     records: Any
+    block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
 
     @property
     def size(self) -> tuple[int, int, int]:
@@ -135,6 +136,7 @@ class PastePlan:
     palette: list[dict[str, Any]]
     records: Any
     chunks: tuple[PasteChunkRange, ...]
+    block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
 
     @property
     def block_count(self) -> int:
@@ -177,6 +179,8 @@ class SaveJob:
     palette_lookup: dict[str, int] = field(default_factory=dict)
     palette: list[dict[str, Any]] = field(default_factory=list)
     records: Any = field(default_factory=bytearray)
+    block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
+    block_entity_bytes: int = 0
     started_tick: int = 0
     last_progress_tick: int = 0
     ticket_chunk: tuple[int, int] | None = None
@@ -190,6 +194,8 @@ class SaveJob:
     region_record_start: int = 0
     region_palette_start: int = 0
     region_non_air_start: int = 0
+    region_block_entity_keys: set[tuple[int, int, int]] = field(default_factory=set)
+    region_block_entity_bytes_start: int = 0
     region_job_cursor_start: int = 0
     verified_regions: int = 0
     chunk_retries: int = 0
@@ -255,6 +261,10 @@ class PasteJob:
     after_palette_lookup: dict[Any, int] = field(default_factory=dict)
     after_palette: list[dict[str, Any]] = field(default_factory=list)
     after_records: Any = field(default_factory=bytearray)
+    before_block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
+    after_block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
+    before_block_entity_bytes: int = 0
+    after_block_entity_bytes: int = 0
     history_chunks: list[PasteChunkRange] = field(default_factory=list)
     history_chunk: tuple[int, int] | None = None
     history_chunk_start: int = 0
@@ -266,6 +276,8 @@ class PasteJob:
     state_fallbacks: int = 0
     missing_blocks: int = 0
     missing_substitutions: int = 0
+    block_entities_restored: int = 0
+    block_entity_failures: int = 0
     palette_modes: dict[int, str] = field(default_factory=dict)
     missing_type_counts: dict[str, int] = field(default_factory=dict)
     started_tick: int = 0

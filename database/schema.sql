@@ -1,4 +1,4 @@
--- Ninj-OS Schematics 1.6.1
+-- Ninj-OS Schematics 1.7.0
 -- Replace `ninjos_schematics` and `ninjos_schematic_payload_chunks` below if
 -- your config uses a different table_prefix.
 

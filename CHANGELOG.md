@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.0 - 2026-09-04
+
+- Integrated the optional `endstone-blockdata` live service for canonical block-entity NBT and container inventory capture and restoration.
+- Added NSCM format v2 with a dedicated compressed, sparse block-entity section while retaining full read compatibility with NSCM v1 cloud rows and backups.
+- Preserved typed NBT byte, short, long, and float values across JSON storage and restored empty container slots explicitly.
+- Rotated block-entity coordinates with their base blocks and included metadata in paste undo/redo history.
+- Added strict restoration, metadata size limits, startup diagnostics, status output, and failure accounting.
+- Added BlockData, NSCM v1/v2, rotation, streaming, paste, and history regression tests.
+- Added a dedicated `commands.md` command and usage reference.
+
 ## 1.6.1 - 2026-09-04
 
 - Added a wall-clock paste budget so costly block writes yield before monopolizing the Bedrock server tick.

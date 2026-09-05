@@ -133,6 +133,19 @@ max_operations_per_player = 5
 max_blocks_per_operation = 2000000
 max_total_blocks_per_player = 2000000
 
+[blockdata]
+# When the matching endstone-blockdata native plugin and Python bridge are
+# installed, canonical block-entity NBT and container inventories are embedded
+# in NSCM v2 saves and restored after the base block is placed. The integration
+# is optional so the schematic plugin can still run on servers without it.
+enabled = true
+# Stop a paste if retained data cannot be restored instead of silently placing
+# only the base block. Disable this only when best-effort metadata is preferred.
+strict_restore = true
+# Fail cleanly before unusually large metadata can consume unbounded memory.
+# Base block records still use the separate spill-to-disk streaming controls.
+max_uncompressed_mb = 64
+
 [tools]
 selector = "ninjos:schem_selector"
 placer = "ninjos:schem_placer"

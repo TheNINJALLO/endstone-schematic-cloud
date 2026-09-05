@@ -65,7 +65,9 @@ def validate_schematic_integrity(schematic: DecodedSchematic) -> dict[str, int |
     if count > volume:
         raise ValueError(f"schematic has {count:,} records for a {volume:,}-block volume")
 
+    unmatched_entities = set(schematic.block_entities)
     for index, (dx, dy, dz, palette_index) in enumerate(iter_records(schematic.records)):
+        unmatched_entities.discard((dx, dy, dz))
         if dx >= sx or dy >= sy or dz >= sz:
             raise ValueError(
                 f"record {index:,} is outside schematic bounds: ({dx}, {dy}, {dz}) "
@@ -75,6 +77,17 @@ def validate_schematic_integrity(schematic: DecodedSchematic) -> dict[str, int |
             raise ValueError(
                 f"record {index:,} references missing palette index {palette_index}"
             )
+    for dx, dy, dz in schematic.block_entities:
+        if dx >= sx or dy >= sy or dz >= sz:
+            raise ValueError(
+                f"block entity is outside schematic bounds: ({dx}, {dy}, {dz}) "
+                f"not within {sx}x{sy}x{sz}"
+            )
+    if unmatched_entities:
+        dx, dy, dz = min(unmatched_entities)
+        raise ValueError(
+            f"block entity at ({dx}, {dy}, {dz}) has no matching block record"
+        )
     return {
         "volume": volume,
         "block_count": count,
@@ -107,6 +120,10 @@ def prepare_paste_plan(
         {"type": str(entry["type"]), "states": rotate_states(dict(entry.get("states", {})), rotation)}
         for entry in schematic.palette
     ]
+    rotated_block_entities = {
+        rotate_coord(dx, dy, dz, schematic.size, rotation): payload
+        for (dx, dy, dz), payload in schematic.block_entities.items()
+    }
     buckets: dict[tuple[int, int], bytearray] = defaultdict(bytearray)
     for dx, dy, dz, palette_index in iter_records(schematic.records):
         rx, ry, rz = rotate_coord(dx, dy, dz, schematic.size, rotation)
@@ -136,6 +153,7 @@ def prepare_paste_plan(
         palette=rotated_palette,
         records=bytes(records),
         chunks=tuple(ranges),
+        block_entities=rotated_block_entities,
     )
 
 
@@ -160,6 +178,10 @@ def prepare_streaming_paste_plan(
         {"type": str(entry["type"]), "states": rotate_states(dict(entry.get("states", {})), rotation)}
         for entry in schematic.palette
     ]
+    rotated_block_entities = {
+        rotate_coord(dx, dy, dz, schematic.size, rotation): payload
+        for (dx, dy, dz), payload in schematic.block_entities.items()
+    }
     output = record_buffer_factory("plan-")
     ranges: list[PasteChunkRange] = []
     cursor = 0
@@ -199,6 +221,7 @@ def prepare_streaming_paste_plan(
             palette=rotated_palette,
             records=output.freeze(),
             chunks=tuple(ranges),
+            block_entities=rotated_block_entities,
         )
     except Exception:
         output.close()

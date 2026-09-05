@@ -1,44 +1,51 @@
-# Release Notes: v1.6.1
+# Release Notes: v1.7.0
 
-## Watchdog-safe large pastes
+## BlockData-aware cloud schematics
 
-v1.6.1 fixes large cloud pastes that could eventually stall the Bedrock main thread, disconnect every player, and stop when the initiating player's disconnect event cancelled the job.
+v1.7.0 integrates the optional [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) service so native cloud saves and backups can retain supported block-entity data instead of only base block types and states.
 
-- Paste, undo, and redo now obey a configurable wall-clock budget in addition to the existing block-count limit. The default is 10 ms per server tick.
-- Native Endstone chunk holds use deferred `unload_chunk_request()` cleanup when available, avoiding synchronous save/unload work at every chunk boundary.
-- Active save, paste, undo, and redo jobs continue when their initiating player disconnects. The player can reconnect and use `/schem status` or `/schem cancel`.
-- Older Endstone builds remain supported through the existing synchronous unload and temporary ticking-area fallbacks.
+- Save scans use bounded native region captures on Endstone's primary thread.
+- Canonical actor NBT and occupied container slots are stored per relative block coordinate.
+- Typed NBT byte, short, long, and float values survive the storage round trip.
+- Paste writes and verifies the base block first, then applies actor NBT and container inventory patches.
+- Empty destination slots are cleared explicitly so a paste cannot leave stale items behind.
+- Block-entity coordinates rotate with the placement.
+- Undo and redo retain the before/after metadata as well as block types and states.
+- `/schem status` reports the connected BlockData API version and adapter.
 
-The MySQL schema, native NSCM format, cloud rows, and Bedrock add-on remain compatible. Existing configuration files automatically receive `performance.paste_time_budget_ms = 10` without replacing administrator settings.
+BlockData remains an optional runtime integration. The schematic plugin does not pin its Python package because its native plugin and CPython bridge must come from the same exact BlockData/BDS/Endstone release bundle.
 
-## Bounded-memory large schematic pipeline
+## NSCM v2 and compatibility
 
-Large saves and pastes could restart the Bedrock process without a Python traceback because several complete copies of the schematic coexisted in RAM. A full-volume record uses 16 bytes per selected block before Python and container overhead. A 16,065,750-block save therefore accumulated about 245 MiB in its first record buffer alone, then created additional immutable, uncompressed, compressed, rotated-plan, and undo copies.
+NSCM v2 adds a dedicated compressed sparse block-entity section after the JSON header. Metadata is not deduplicated into the block palette, because two containers with identical block states can contain different names, items, or NBT.
 
-The v1.6.x pipeline replaces those whole-payload copies with spillable record streams:
+- v1.7.0 reads existing NSCM v1 MySQL rows and native backups.
+- New v1.7.0 saves use NSCM v2, even when the optional metadata section is empty.
+- The MySQL schema and Bedrock add-on do not change.
+- Every server sharing the cloud database should be upgraded before newly saved v2 entries are used.
+- Native `.nscm` exports retain the metadata section exactly. Sponge v3 conversion remains block-state-only for Bedrock actor data.
 
-- Save records remain in memory only until the configurable spill threshold, then continue in a temporary file.
-- Zlib compression reads the records incrementally and writes a compressed payload file.
-- MySQL upload reads that payload in packet-safe chunks without loading it as one Python `bytes` object.
-- MySQL downloads stream to disk and are hash-verified while being written.
-- Native cloud-to-disk backups copy the validated payload file directly instead of reconstructing a whole in-memory blob.
-- Decompression is bounded to 1 MiB output pieces and writes records into a spillable store.
-- Paste planning groups a configurable number of records at a time and writes the rotated plan to a spillable store.
-- Undo and redo before/after records use the same spill-to-disk system.
-- Workspace capacity is checked before a large save or load begins.
-- Orphaned temporary files from an unclean shutdown are removed on the next startup.
+With `blockdata.strict_restore = true`, a destination without the required API or write capability stops on the first retained-data failure and keeps partial undo history. `blockdata.max_uncompressed_mb = 64` bounds in-memory metadata separately from the spill-to-disk base-block record pipeline.
 
-The native NSCM format, MySQL schema, Bedrock add-on, and existing cloud rows remain compatible.
+## Large-paste safeguards retained
+
+The v1.6 watchdog and bounded-memory protections remain active:
+
+- Paste, undo, and redo obey both block-count and wall-clock budgets.
+- Native chunk holds use deferred release when supported.
+- Active operations continue when the initiating player disconnects.
+- Base block records, rotated plans, downloads, uploads, and undo journals remain streamed or spillable.
+- Packet-safe MySQL chunks and SHA-256 verification are unchanged.
 
 ## Validation
 
-The v1.6.1 release passes 65 automated tests, including the large-paste safety regressions plus packet-safe file upload/download and native disk-copy tests that reject whole-file reads. A synthetic 1,000,000-record test uses a 16,000,000-byte file-backed record stream while Python's traced peak remains about 2.6 MiB through record creation, streaming compression, and streaming decode. A streaming 90-degree paste plan for the same record count peaks around 2.2 MiB of traced Python memory.
+The v1.7.0 release passes 72 automated tests. New coverage exercises NSCM v1/v2 compatibility, bounded save capture and rollback, in-memory and streaming metadata round trips, typed NBT reconstruction, inventory clearing, rotation, metadata-aware paste history, and strict failure behavior alongside the existing large-paste, database, chunk, and export suites.
 
-## Compatibility
+## Runtime compatibility
 
 - Endstone API 0.11
+- Python 3.10 or newer for the schematic plugin
+- Matching platform-specific BlockData native plugin and CPython bridge when metadata retention is enabled
 - Existing MySQL rows remain readable
 - No database migration
-- No Bedrock add-on changes
-- No NSCM format change
-- Existing packet-safe MySQL and missing-block policies remain enabled
+- No Bedrock add-on change

@@ -24,13 +24,13 @@ from endstone.inventory import ItemStack
 from endstone.plugin import Plugin
 
 from .access import player_has_schematic_access
+from .blockdata_integration import BlockDataIntegration, BlockDataIntegrationError
 from .codec import (
     FORMAT_VERSION,
     RECORD,
     append_record,
     decode_schematic,
     decode_schematic_file,
-    encode_schematic,
     encode_schematic_to_file,
     palette_key,
     record_at,
@@ -70,8 +70,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.6.1"
-BUILD_ID = "large-paste-watchdog-safety-20260904"
+PLUGIN_VERSION = "1.7.0"
+BUILD_ID = "blockdata-nscm-v2-20260904"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -285,6 +285,30 @@ class NinjOSSchematicsPlugin(Plugin):
         self._history_max_operations = max(1, min(50, int(history.get("max_operations_per_player", 5))))
         self._history_max_blocks_per_operation = max(1, int(history.get("max_blocks_per_operation", self._max_blocks)))
         self._history_max_total_blocks = max(1, int(history.get("max_total_blocks_per_player", self._max_blocks)))
+
+        blockdata = self.config.get("blockdata", {})
+        self._blockdata_enabled = bool(blockdata.get("enabled", True))
+        self._blockdata_strict_restore = bool(blockdata.get("strict_restore", True))
+        self._blockdata_max_bytes = max(
+            1, int(blockdata.get("max_uncompressed_mb", 64))
+        ) * 1024 * 1024
+        self._blockdata: BlockDataIntegration | None = None
+        self._blockdata_error = "disabled in config.toml"
+        if self._blockdata_enabled:
+            try:
+                self._blockdata = BlockDataIntegration.connect(self.server)
+                self._blockdata_error = ""
+                self.logger.info(
+                    f"BlockData API v{self._blockdata.api_version} connected through "
+                    f"adapter={self._blockdata.adapter_name}; block-entity and container data "
+                    "will be retained in native NSCM saves."
+                )
+            except Exception as exc:
+                self._blockdata_error = str(exc)
+                self.logger.warning(
+                    "BlockData integration is unavailable; base block types and states will "
+                    f"still work, but block-entity data will not be retained: {exc}"
+                )
 
         tools = self.config.get("tools", {})
         self.tool_ids = {
@@ -609,6 +633,8 @@ class NinjOSSchematicsPlugin(Plugin):
         job.region_record_start = len(job.records)
         job.region_palette_start = len(job.palette)
         job.region_non_air_start = job.non_air_count
+        job.region_block_entity_keys.clear()
+        job.region_block_entity_bytes_start = job.block_entity_bytes
         job.region_job_cursor_start = job.cursor
 
     def _rollback_save_region(self, job: SaveJob) -> None:
@@ -625,6 +651,10 @@ class NinjOSSchematicsPlugin(Plugin):
             for index, entry in enumerate(job.palette)
         }
         job.non_air_count = job.region_non_air_start
+        for position in job.region_block_entity_keys:
+            job.block_entities.pop(position, None)
+        job.region_block_entity_keys.clear()
+        job.block_entity_bytes = job.region_block_entity_bytes_start
         job.cursor = job.region_job_cursor_start
         job.region_cursor = 0
         job.region_snapshot_active = False
@@ -751,8 +781,25 @@ class NinjOSSchematicsPlugin(Plugin):
                     )
 
     def _scan_save_batch(self, job: SaveJob, dimension: Any, count: int) -> int:
+        # BlockData's native region call is bounded to 32,768 blocks. Coordinates
+        # come from one chunk-contained region, so a 32,000-record slice plus its
+        # partial first/last layers always stays below that native ceiling.
+        integration = getattr(self, "_blockdata", None)
+        if integration is not None:
+            count = min(count, 32_000)
+        coordinates = list(job.coordinates(count))
+        captured_entities: dict[tuple[int, int, int], dict[str, Any]] = {}
+        if integration is not None and coordinates:
+            xs = [entry[0] for entry in coordinates]
+            ys = [entry[1] for entry in coordinates]
+            zs = [entry[2] for entry in coordinates]
+            captured_entities = integration.capture_region(
+                job.dimension_id,
+                (min(xs), min(ys), min(zs)),
+                (max(xs), max(ys), max(zs)),
+            )
         processed = 0
-        for x, y, z, dx, dy, dz in job.coordinates(count):
+        for x, y, z, dx, dy, dz in coordinates:
             block = dimension.get_block_at(x, y, z)
             data = block.data
             block_type = self.block_data_identifier(data)
@@ -768,10 +815,39 @@ class NinjOSSchematicsPlugin(Plugin):
                     job.palette_lookup[key] = palette_index
                     job.palette.append({"type": block_type, "states": states})
                 append_record(job.records, dx, dy, dz, palette_index)
+                entity = captured_entities.get((x, y, z))
+                if entity is not None:
+                    position = (dx, dy, dz)
+                    entity_size = self._block_entity_payload_size(entity)
+                    if job.block_entity_bytes + entity_size > getattr(
+                        self, "_blockdata_max_bytes", 64 * 1024 * 1024
+                    ):
+                        raise RuntimeError(
+                            "captured block-entity data exceeds "
+                            f"blockdata.max_uncompressed_mb="
+                            f"{getattr(self, '_blockdata_max_bytes', 64 * 1024 * 1024) // (1024**2)}"
+                        )
+                    job.block_entities[position] = entity
+                    job.block_entity_bytes += entity_size
+                    job.region_block_entity_keys.add(position)
             job.cursor += 1
             job.region_cursor += 1
             processed += 1
         return processed
+
+    @staticmethod
+    def _block_entity_payload_size(entity: dict[str, Any] | None) -> int:
+        if entity is None:
+            return 0
+        return len(
+            json.dumps(
+                entity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ) + 32
 
     def _fail_save_job(self, job: SaveJob, reason: str) -> None:
         self.save_jobs.pop(job.player_uuid, None)
@@ -794,6 +870,7 @@ class NinjOSSchematicsPlugin(Plugin):
         records = job.records.freeze() if hasattr(job.records, "freeze") else RecordSource(data=bytes(job.records))
         palette = list(job.palette)
         size = job.size
+        blockdata = getattr(self, "_blockdata", None)
         header = {
             "name": job.name,
             "display_name": job.display_name,
@@ -813,7 +890,11 @@ class NinjOSSchematicsPlugin(Plugin):
             "non_air_count": job.non_air_count,
             "includes_air": job.include_air,
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "block_entities": False,
+            "block_entities": bool(job.block_entities),
+            "block_entity_count": len(job.block_entities),
+            "blockdata_api_version": (
+                blockdata.api_version if blockdata is not None else ""
+            ),
             "streaming_codec": True,
         }
 
@@ -822,7 +903,12 @@ class NinjOSSchematicsPlugin(Plugin):
             payload_path = self._new_payload_path("payload-save-")
             try:
                 encoded = encode_schematic_to_file(
-                    header, palette, records, payload_path, self._compression_level
+                    header,
+                    palette,
+                    records,
+                    payload_path,
+                    self._compression_level,
+                    block_entities=job.block_entities,
                 )
                 row = {
                     "namespace": self.store.settings.namespace,
@@ -869,6 +955,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 f"{row['size_x']}×{row['size_y']}×{row['size_z']}, "
                 f"{row['block_count']:,} stored records from {job.total_volume:,} scanned blocks across "
                 f"{job.verified_regions:,} verified chunk region(s), "
+                f"{len(job.block_entities):,} retained block entit{'y' if len(job.block_entities) == 1 else 'ies'}, "
                 f"{row['compressed_bytes'] / 1024:.1f} KiB ({ratio:.1f}% compression), "
                 f"stored as {storage_note} with bounded-memory streaming."
             )
@@ -1049,6 +1136,8 @@ class NinjOSSchematicsPlugin(Plugin):
         processed = 0
         max_failures = getattr(self, "_max_paste_failures", 0)
         verify_writes = getattr(self, "_verify_paste_writes", True)
+        integration = getattr(self, "_blockdata", None)
+        strict_blockdata = getattr(self, "_blockdata_strict_restore", True)
 
         for record_index in range(job.cursor, end):
             # Always allow one record to make forward progress, then yield as soon as
@@ -1080,12 +1169,28 @@ class NinjOSSchematicsPlugin(Plugin):
             current_states: dict[str, Any] = {}
             after_type = ""
             after_states: dict[str, Any] = {}
+            relative_position = (dx, dy, dz)
+            world_position = (
+                job.anchor.x + dx,
+                job.anchor.y + dy,
+                job.anchor.z + dz,
+            )
+            desired_entity = job.plan.block_entities.get(relative_position)
+            before_entity: dict[str, Any] | None = None
+            after_entity: dict[str, Any] | None = None
             changed = False
 
             try:
                 current = target.data
                 current_type = self.block_data_identifier(current)
                 current_states = dict(current.block_states)
+                if integration is not None and (desired_entity is not None or job.capture_history):
+                    before_entity = integration.capture(job.dimension_id, world_position)
+                elif desired_entity is not None and strict_blockdata:
+                    detail = getattr(self, "_blockdata_error", "BlockData API is unavailable")
+                    raise BlockDataIntegrationError(
+                        f"retained block data cannot be restored because {detail}"
+                    )
 
                 mode, block_data = self._resolve_palette_entry(
                     job, palette_index, requested_type, requested_states
@@ -1124,9 +1229,11 @@ class NinjOSSchematicsPlugin(Plugin):
                             f"missing-block fallback {desired_type} is not available: {exc}"
                         ) from exc
 
-                if self._skip_unchanged and current_type == desired_type and (
+                base_matches = current_type == desired_type and (
                     not require_exact_states or current_states == desired_states
-                ):
+                )
+                entity_matches = desired_entity is None or before_entity == desired_entity
+                if self._skip_unchanged and base_matches and entity_matches:
                     job.skipped += 1
                     job.cursor += 1
                     processed += 1
@@ -1166,6 +1273,33 @@ class NinjOSSchematicsPlugin(Plugin):
                     changed = current_type != after_type or current_states != after_states
                     verified = after_type == desired_type and after_states == desired_states
 
+                blockdata_error = ""
+                if verified and desired_entity is not None:
+                    if integration is None:
+                        blockdata_error = (
+                            "retained block data was not restored because the BlockData API "
+                            "is unavailable"
+                        )
+                    else:
+                        try:
+                            integration.restore(job.dimension_id, world_position, desired_entity)
+                            job.block_entities_restored += 1
+                        except Exception as exc:
+                            blockdata_error = str(exc)
+                    if blockdata_error:
+                        job.block_entity_failures += 1
+
+                if integration is not None and job.capture_history:
+                    try:
+                        after_entity = integration.capture(job.dimension_id, world_position)
+                    except Exception as exc:
+                        if strict_blockdata:
+                            blockdata_error = blockdata_error or (
+                                f"BlockData history capture failed: {exc}"
+                            )
+                            job.block_entity_failures += 1
+                changed = changed or before_entity != after_entity
+
                 if verify_writes and not verified:
                     failure_reason = (
                         f"write verification failed at "
@@ -1173,8 +1307,20 @@ class NinjOSSchematicsPlugin(Plugin):
                         f"expected {desired_type} {desired_states}, got {after_type} {after_states}"
                     )
                     job.failed += 1
+                elif blockdata_error and strict_blockdata:
+                    failure_reason = (
+                        f"block-data restore failed at "
+                        f"{world_position[0]}, {world_position[1]}, {world_position[2]}: "
+                        f"{blockdata_error}"
+                    )
+                    job.failed += 1
                 else:
                     job.placed += 1
+                    if blockdata_error:
+                        self.logger.warning(
+                            f"{job.operation.title()} '{job.name}' placed the base block at "
+                            f"{world_position} without retained BlockData metadata: {blockdata_error}"
+                        )
 
                 if job.capture_history and changed:
                     self._capture_history_change(
@@ -1186,6 +1332,8 @@ class NinjOSSchematicsPlugin(Plugin):
                         current_states,
                         after_type,
                         after_states,
+                        before_entity,
+                        after_entity,
                     )
             except Exception as exc:
                 if not failure_reason:
@@ -1226,25 +1374,31 @@ class NinjOSSchematicsPlugin(Plugin):
         before_states: dict[str, Any],
         after_type: str,
         after_states: dict[str, Any],
+        before_entity: dict[str, Any] | None = None,
+        after_entity: dict[str, Any] | None = None,
     ) -> None:
         if not job.capture_history:
             return
         if job.captured_blocks >= self._history_max_blocks_per_operation:
-            job.capture_history = False
-            job.history_disabled_reason = (
+            self._disable_history_capture(
+                job,
                 f"changed-block count exceeded the configured history limit "
-                f"({self._history_max_blocks_per_operation:,})"
+                f"({self._history_max_blocks_per_operation:,})",
             )
-            job.before_palette_lookup.clear()
-            job.before_palette.clear()
-            self._close_record_storage(job.before_records)
-            job.before_records = bytearray()
-            job.after_palette_lookup.clear()
-            job.after_palette.clear()
-            self._close_record_storage(job.after_records)
-            job.after_records = bytearray()
-            job.history_chunks.clear()
-            job.history_chunk = None
+            return
+
+        before_entity_size = self._block_entity_payload_size(before_entity)
+        after_entity_size = self._block_entity_payload_size(after_entity)
+        entity_limit = getattr(self, "_blockdata_max_bytes", 64 * 1024 * 1024)
+        if (
+            job.before_block_entity_bytes + before_entity_size > entity_limit
+            or job.after_block_entity_bytes + after_entity_size > entity_limit
+        ):
+            self._disable_history_capture(
+                job,
+                "retained BlockData history exceeded "
+                f"blockdata.max_uncompressed_mb={entity_limit // (1024**2)}",
+            )
             return
 
         chunk = ((job.anchor.x + dx) // 16, (job.anchor.z + dz) // 16)
@@ -1276,6 +1430,31 @@ class NinjOSSchematicsPlugin(Plugin):
         )
         append_record(job.before_records, dx, dy, dz, before_index)
         append_record(job.after_records, dx, dy, dz, after_index)
+        position = (dx, dy, dz)
+        if before_entity is not None:
+            job.before_block_entities[position] = before_entity
+            job.before_block_entity_bytes += before_entity_size
+        if after_entity is not None:
+            job.after_block_entities[position] = after_entity
+            job.after_block_entity_bytes += after_entity_size
+
+    def _disable_history_capture(self, job: PasteJob, reason: str) -> None:
+        job.capture_history = False
+        job.history_disabled_reason = reason
+        job.before_palette_lookup.clear()
+        job.before_palette.clear()
+        self._close_record_storage(job.before_records)
+        job.before_records = bytearray()
+        job.after_palette_lookup.clear()
+        job.after_palette.clear()
+        self._close_record_storage(job.after_records)
+        job.after_records = bytearray()
+        job.before_block_entities.clear()
+        job.after_block_entities.clear()
+        job.before_block_entity_bytes = 0
+        job.after_block_entity_bytes = 0
+        job.history_chunks.clear()
+        job.history_chunk = None
 
     @staticmethod
     def _history_palette_index(
@@ -1325,12 +1504,14 @@ class NinjOSSchematicsPlugin(Plugin):
             palette=list(job.before_palette),
             records=before_records,
             chunks=tuple(chunks),
+            block_entities=dict(job.before_block_entities),
         )
         after_plan = PastePlan(
             size=job.plan.size,
             palette=list(job.after_palette),
             records=after_records,
             chunks=tuple(chunks),
+            block_entities=dict(job.after_block_entities),
         )
         return HistoryEntry(
             name=job.name,
@@ -1369,6 +1550,12 @@ class NinjOSSchematicsPlugin(Plugin):
             missing_note = self._missing_block_note(job)
             self._log_missing_blocks(job)
             if player:
+                blockdata_note = ""
+                if job.block_entities_restored or job.block_entity_failures:
+                    blockdata_note = (
+                        f" BlockData: {job.block_entities_restored:,} restored, "
+                        f"{job.block_entity_failures:,} failed."
+                    )
                 history_note = ""
                 if history_entry is not None:
                     history_note = f" Undo captured for {history_entry.block_count:,} changed blocks."
@@ -1376,7 +1563,8 @@ class NinjOSSchematicsPlugin(Plugin):
                     history_note = f" Undo was not captured because {job.history_disabled_reason}."
                 player.send_message(
                     f"§aPaste complete: {job.placed:,} blocks placed, {job.skipped:,} unchanged or unavailable skipped, "
-                    f"{job.state_fallbacks:,} state fallbacks, {job.failed:,} failures.{missing_note}{history_note}"
+                    f"{job.state_fallbacks:,} state fallbacks, {job.failed:,} failures."
+                    f"{blockdata_note}{missing_note}{history_note}"
                 )
             self._cleanup_plan(job.plan)
             self._close_record_storage(job.before_records)
@@ -1399,10 +1587,16 @@ class NinjOSSchematicsPlugin(Plugin):
         self._log_missing_blocks(job)
         if player:
             verb = "Undo" if job.operation == "undo" else "Redo"
+            blockdata_note = ""
+            if job.block_entities_restored or job.block_entity_failures:
+                blockdata_note = (
+                    f" BlockData: {job.block_entities_restored:,} restored, "
+                    f"{job.block_entity_failures:,} failed."
+                )
             player.send_message(
                 f"§a{verb} complete for '{job.name}': {job.placed:,} blocks restored, "
                 f"{job.skipped:,} already matched or unavailable, {job.failed:,} failures."
-                f"{missing_note}"
+                f"{blockdata_note}{missing_note}"
             )
 
     def _fail_paste_job(self, job: PasteJob, reason: str) -> None:
@@ -2624,6 +2818,20 @@ class NinjOSSchematicsPlugin(Plugin):
             f"(spill after {self._record_spill_threshold // (1024**2)} MiB)",
             f"§7Streaming workspace: §f{self._stream_work_dir}",
         ]
+        blockdata = getattr(self, "_blockdata", None)
+        if blockdata is not None:
+            lines.append(
+                f"§7BlockData retention: §aReady §8(API {blockdata.api_version}, "
+                f"{blockdata.adapter_name})§r"
+            )
+        else:
+            blockdata_error = str(
+                getattr(self, "_blockdata_error", "not initialized")
+            )[:180]
+            lines.append(
+                f"§7BlockData retention: §cUnavailable §8("
+                f"{blockdata_error})§r"
+            )
         selection = self.selections.get(player.unique_id)
         if selection and selection.complete:
             sx, sy, sz = selection.size

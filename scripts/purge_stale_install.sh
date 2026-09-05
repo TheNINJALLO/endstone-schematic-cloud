@@ -15,4 +15,4 @@ for SITE in "$PLUGIN_DIR"/.local/lib/python*/site-packages; do
     find "$SITE" -maxdepth 1 -type d -name 'endstone_ninjos_schematics-*.dist-info' -exec rm -rf {} + 2>/dev/null || true
 done
 
-echo "Purge complete. Upload only endstone_ninjos_schematics-1.6.1-py3-none-any.whl, then start the server."
+echo "Purge complete. Upload only endstone_ninjos_schematics-1.7.0-py3-none-any.whl, then start the server."

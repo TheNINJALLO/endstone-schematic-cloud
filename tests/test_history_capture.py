@@ -1,8 +1,16 @@
 import importlib
+import copy
 import sys
 import types
 
-from endstone_ninjos_schematics.models import BlockPos, PasteChunkRange, PasteJob, PastePlan
+from endstone_ninjos_schematics.models import (
+    BlockPos,
+    ChunkRegion,
+    PasteChunkRange,
+    PasteJob,
+    PastePlan,
+    SaveJob,
+)
 
 
 def _load_plugin_module():
@@ -251,6 +259,223 @@ def test_paste_batch_yields_after_wall_clock_deadline():
 
     assert plugin._paste_batch(job, object(), 3, deadline=1.0) == 1
     assert job.cursor == 1
+
+
+def test_paste_restores_blockdata_and_captures_it_for_undo():
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._history_max_blocks_per_operation = 100
+    plugin._skip_unchanged = True
+    plugin._apply_physics = False
+    plugin._verify_paste_writes = True
+    plugin._max_paste_failures = 0
+    plugin._blockdata_strict_restore = True
+    plugin._tick_counter = 50
+
+    old_entity = {
+        "schema": 1,
+        "actor_type": "minecraft:chest",
+        "canonical_nbt": True,
+        "is_container": True,
+        "container_size": 3,
+        "nbt": {"CustomName": "Old"},
+        "inventory": [],
+    }
+    new_entity = {
+        **old_entity,
+        "nbt": {"CustomName": "New"},
+        "inventory": [[0, {"Name": "minecraft:diamond", "Count": 1}]],
+    }
+    entities = {(4, 70, 8): copy.deepcopy(old_entity)}
+
+    class Integration:
+        def capture(self, _dimension, position):
+            return copy.deepcopy(entities.get(position))
+
+        def restore(self, _dimension, position, payload):
+            entities[position] = copy.deepcopy(payload)
+
+    plugin._blockdata = Integration()
+
+    class Type:
+        id = "minecraft:chest"
+
+    class Data:
+        type = Type()
+        block_states = {"facing_direction": 2}
+
+    class Block:
+        data = Data()
+
+        def set_data(self, data, apply_physics=False):
+            self.data = data
+            entities.pop((4, 70, 8), None)
+
+    class Dimension:
+        def get_block_at(self, _x, _y, _z):
+            return block
+
+    class Server:
+        def create_block_data(self, _identifier, _states):
+            return Data()
+
+    block = Block()
+    plugin.server = Server()
+    records = bytearray()
+    from endstone_ninjos_schematics.codec import append_record
+
+    append_record(records, 0, 0, 0, 0)
+    plan = PastePlan(
+        size=(1, 1, 1),
+        palette=[{"type": "minecraft:chest", "states": {"facing_direction": 2}}],
+        records=bytes(records),
+        chunks=(PasteChunkRange(0, 0, 0, 1),),
+        block_entities={(0, 0, 0): copy.deepcopy(new_entity)},
+    )
+    job = PasteJob(
+        player_uuid="player",
+        name="container",
+        plan=plan,
+        dimension_id="Overworld",
+        anchor=BlockPos(4, 70, 8),
+        rotation=0,
+        capture_history=True,
+    )
+
+    assert plugin._paste_batch(job, Dimension(), 1) == 1
+    assert entities[(4, 70, 8)] == new_entity
+    assert job.block_entities_restored == 1
+    history = plugin._history_entry_from_job(job)
+    assert history is not None
+    assert history.before_plan.block_entities[(0, 0, 0)] == old_entity
+    assert history.after_plan.block_entities[(0, 0, 0)] == new_entity
+
+
+def test_save_scan_captures_relative_blockdata_and_rolls_it_back_with_chunk():
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    entity = {
+        "schema": 1,
+        "actor_type": "minecraft:chest",
+        "canonical_nbt": True,
+        "is_container": True,
+        "container_size": 1,
+        "nbt": {},
+        "inventory": [],
+    }
+
+    class Integration:
+        def capture_region(self, dimension, minimum, maximum):
+            assert dimension == "Overworld"
+            assert minimum == maximum == (10, 64, 20)
+            return {(10, 64, 20): copy.deepcopy(entity)}
+
+    plugin._blockdata = Integration()
+    plugin._blockdata_max_bytes = 1024 * 1024
+
+    class Type:
+        id = "minecraft:chest"
+
+    block = types.SimpleNamespace(
+        data=types.SimpleNamespace(type=Type(), block_states={})
+    )
+    dimension = types.SimpleNamespace(get_block_at=lambda *_args: block)
+    region = ChunkRegion(0, 1, 10, 10, 20, 20, 64, 64)
+    job = SaveJob(
+        player_uuid="player",
+        player_name="Player",
+        player_xuid="",
+        name="container",
+        display_name="container",
+        description="",
+        overwrite=False,
+        include_air=True,
+        dimension_id="Overworld",
+        low=BlockPos(10, 64, 20),
+        size=(1, 1, 1),
+        total_volume=1,
+        regions=(region,),
+    )
+
+    plugin._begin_save_region_snapshot(job)
+    assert plugin._scan_save_batch(job, dimension, 1) == 1
+    assert job.block_entities == {(0, 0, 0): entity}
+    assert job.block_entity_bytes > 0
+
+    plugin._rollback_save_region(job)
+    assert job.block_entities == {}
+    assert job.block_entity_bytes == 0
+    assert job.cursor == job.region_cursor == 0
+
+
+def test_strict_blockdata_stops_before_mutating_when_api_is_missing():
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._blockdata = None
+    plugin._blockdata_error = "matching bridge is not installed"
+    plugin._blockdata_strict_restore = True
+    plugin._skip_unchanged = True
+    plugin._verify_paste_writes = True
+    plugin._max_paste_failures = 0
+
+    class Type:
+        id = "minecraft:chest"
+
+    class Data:
+        type = Type()
+        block_states = {}
+
+    class Block:
+        data = Data()
+        mutated = False
+
+        def set_data(self, _data, apply_physics=False):
+            self.mutated = True
+
+    class Server:
+        def create_block_data(self, _identifier, _states):
+            return Data()
+
+    block = Block()
+    plugin.server = Server()
+    records = bytearray()
+    from endstone_ninjos_schematics.codec import append_record
+
+    append_record(records, 0, 0, 0, 0)
+    plan = PastePlan(
+        size=(1, 1, 1),
+        palette=[{"type": "minecraft:chest", "states": {}}],
+        records=bytes(records),
+        chunks=(PasteChunkRange(0, 0, 0, 1),),
+        block_entities={
+            (0, 0, 0): {
+                "schema": 1,
+                "actor_type": "minecraft:chest",
+                "canonical_nbt": True,
+                "is_container": True,
+                "container_size": 0,
+                "nbt": {},
+                "inventory": [],
+            }
+        },
+    )
+    job = PasteJob(
+        player_uuid="player",
+        name="strict",
+        plan=plan,
+        dimension_id="Overworld",
+        anchor=BlockPos(0, 64, 0),
+        rotation=0,
+    )
+    dimension = types.SimpleNamespace(get_block_at=lambda *_args: block)
+
+    try:
+        plugin._paste_batch(job, dimension, 1)
+    except RuntimeError as exc:
+        assert "matching bridge is not installed" in str(exc)
+    else:
+        raise AssertionError("strict retained-data paste continued without BlockData")
+    assert not block.mutated
 
 
 def test_player_quit_keeps_active_paste_but_releases_interactive_state():

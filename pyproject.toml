@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "endstone-ninjos-schematics"
-version = "1.6.1"
+version = "1.7.0"
 description = "Shared Endstone schematic library with bounded-memory streaming, packet-safe MySQL, verified chunks, undo, disk, and Sponge v3 export"
 readme = "README.md"
 requires-python = ">=3.10"

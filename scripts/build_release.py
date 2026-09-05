@@ -9,11 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 PROJECT = f"NinjOS-Schematic-Cloud-{VERSION}"
 
 CORE_ARTIFACTS = [
-    DIST / "endstone_ninjos_schematics-1.6.1-py3-none-any.whl",
+    DIST / "endstone_ninjos_schematics-1.7.0-py3-none-any.whl",
     DIST / "NinjOS_Schematic_Tools.mcaddon",
     DIST / "NinjOS_Schematics_BP.mcpack",
     DIST / "NinjOS_Schematics_RP.mcpack",
@@ -30,6 +30,7 @@ SOURCE_ROOTS = [
 SOURCE_FILES = [
     "pyproject.toml",
     "README.md",
+    "commands.md",
     "INSTALL.md",
     "RELEASE_NOTES.md",
     "CHANGELOG.md",
@@ -85,7 +86,14 @@ def main() -> None:
     staging.mkdir()
     for path in CORE_ARTIFACTS:
         shutil.copy2(path, staging / path.name)
-    for filename in ("README.md", "INSTALL.md", "RELEASE_NOTES.md", "CHANGELOG.md", "LICENSE"):
+    for filename in (
+        "README.md",
+        "commands.md",
+        "INSTALL.md",
+        "RELEASE_NOTES.md",
+        "CHANGELOG.md",
+        "LICENSE",
+    ):
         shutil.copy2(ROOT / filename, staging / filename)
     shutil.copy2(sums_path, staging / sums_path.name)
     shutil.copytree(ROOT / "database", staging / "database")

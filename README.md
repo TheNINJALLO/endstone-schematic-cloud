@@ -14,6 +14,7 @@
   <img alt="Bedrock 26.x" src="https://img.shields.io/badge/Bedrock-26.x-63b8ff?style=flat-square">
   <img alt="Python 3.10 or newer" src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white">
   <img alt="MySQL 8 or MariaDB 10.5" src="https://img.shields.io/badge/MySQL_8%2B%20%7C%20MariaDB_10.5%2B-f2b84b?style=flat-square&amp;logo=mysql&amp;logoColor=white">
+  <img alt="Optional BlockData integration" src="https://img.shields.io/badge/BlockData-Optional-c084fc?style=flat-square">
 </p>
 
 <p align="center">
@@ -43,6 +44,7 @@ The plugin is designed for large builds:
 - Applies a real-time paste budget to protect the Bedrock main thread.
 - Holds and verifies each chunk before reading or writing it.
 - Supports undo and redo within configurable history limits.
+- Retains canonical block-entity NBT and container inventories through the optional BlockData API.
 - Continues active world operations if the initiating player disconnects.
 - Exports lossless native backups and Sponge Schematic v3 files for WorldEdit or Amulet.
 
@@ -67,14 +69,15 @@ flowchart LR
 | Minecraft Bedrock / BDS | `26.x` |
 | Python | `3.10+` |
 | Database | MySQL `8.0+` or MariaDB `10.5+` |
-| Plugin release | `v1.6.1` |
+| Plugin release | `v1.7.0` |
+| Block metadata | Optional matching [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) release |
 
 ### 1. Download and install
 
 Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
 
 ```bash
-gh release download v1.6.1 \
+gh release download v1.7.0 \
   --repo TheNINJALLO/endstone-schematic-cloud \
   --pattern "*.whl"
 ```
@@ -111,6 +114,11 @@ auto_create_schema = true
 
 [server]
 server_id = "survival-1"
+
+[blockdata]
+enabled = true
+strict_restore = true
+max_uncompressed_mb = 64
 ```
 
 For multiple servers:
@@ -145,8 +153,10 @@ Restart Endstone and run:
 The startup log for this release contains:
 
 ```text
-Enabled v1.6.1 build=large-paste-watchdog-safety-20260904
+Enabled v1.7.0 build=blockdata-nscm-v2-20260904
 ```
+
+If BlockData is installed, startup also reports its API version and active adapter. `/schem status` shows `BlockData retention: Ready`.
 
 ## Access control
 
@@ -237,6 +247,25 @@ Schematic names normalize to lowercase and may contain letters, numbers, dots, u
 > [!NOTE]
 > Paste, undo, and redo jobs continue if the initiating player disconnects. Reconnect with the same account to view status or cancel the operation.
 
+### Retain block-entity data with BlockData
+
+Install the native plugin and matching platform/Python bridge from the same [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api/releases) release as the running BDS and Endstone build. Restart the server; do not mix bridge and native-plugin versions.
+
+When the live `endstone:blockdata:v2` service is available, a cloud save captures coordinate-free canonical actor NBT and occupied container slots into the sparse NSCM v2 metadata section. Paste performs these operations on the primary thread:
+
+1. Capture destination metadata for undo.
+2. Place and verify the base block and states.
+3. Restore supported actor NBT through a force patch.
+4. Restore occupied items and explicitly clear every empty container slot.
+5. Capture the result for redo history.
+
+Typed NBT byte, short, long, and float values are preserved. Metadata coordinates rotate with their blocks. `strict_restore = true` stops on the first metadata failure and retains a partial undo instead of reporting a silently incomplete paste.
+
+The integration is optional for ordinary blocks. If it is unavailable, block types and states still save and paste normally. A schematic that actually contains retained metadata requires BlockData on the destination while strict restoration is enabled.
+
+> [!IMPORTANT]
+> NSCM v1 cloud rows and backups remain readable in v1.7.0. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
+
 ### Use the optional in-game tools
 
 Activate both packs from `addon/` on the world, then run:
@@ -276,7 +305,7 @@ WorldEdit and Amulet exports use Sponge Schematic v3:
 | Native NSCM | `.nscm` | Lossless Ninj-OS backup and database-level recovery |
 | Sponge Schematic v3 | `.schem` | Modern WorldEdit and Amulet workflows |
 
-The Sponge exporter preserves dimensions, the block palette, mapped states, author metadata, source server, and origin. The current Endstone API does not expose a stable generic serializer for block-entity NBT, so container inventories, sign text, command-block commands, lectern books, spawner data, entities, and biomes are not exported.
+The Sponge exporter preserves dimensions, the block palette, mapped states, author metadata, source server, and origin. Native `.nscm` backups retain the BlockData sidecar exactly. Sponge v3 conversion does not currently translate that Bedrock actor data, so container inventories, sign text, command-block commands, lectern books, spawner data, entities, and biomes are not exported to `.schem`.
 
 > [!CAUTION]
 > `/schem remove` permanently deletes a cloud row and its payload for every connected server. Prefer `/schem backup-remove` when a recoverable native copy is required. `/schem archive` hides an entry without deleting its database row.
@@ -284,6 +313,8 @@ The Sponge exporter preserves dimensions, the block palette, mapped states, auth
 ## Commands
 
 All aliases reach the same centralized operator-or-architect access check.
+
+See [commands.md](commands.md) for the dedicated command reference, argument rules, aliases, examples, and recommended workflows.
 
 ### Selection and menu
 
@@ -350,6 +381,7 @@ The packaged [config.toml](src/endstone_ninjos_schematics/config.toml) is the co
 | `[placement]` | Missing custom-block behavior |
 | `[preview]` | Selection and placement particles |
 | `[history]` | Undo/redo operation and block limits |
+| `[blockdata]` | Optional actor/container capture, strict restoration, and metadata memory limit |
 | `[tools]` | Custom item identifiers and interaction debounce |
 
 ### Missing custom blocks
@@ -374,7 +406,7 @@ Exact restoration requires the same behavior packs and block identifiers on sour
 
 ## Large schematic safety
 
-v1.6.1 protects long-running pastes with both a record limit and a wall-clock limit:
+v1.7.0 retains the v1.6 watchdog protections: long-running pastes have both a record limit and a wall-clock limit.
 
 ```toml
 [performance]
@@ -456,6 +488,14 @@ Undo is automatically disabled for an individual paste above `history.max_blocks
 
 Install the same behavior pack used by the source server, or select an intentional `missing_block_policy`. The completion message and server log report unavailable identifiers.
 
+### BlockData retention is unavailable
+
+- Install the native BlockData plugin and its matching platform-specific CPython bridge from one release bundle.
+- Match that bundle to the exact BDS and Endstone versions shown in the BlockData release.
+- Fully restart instead of using `/reload`.
+- Check the startup warning and `/schem status` for the rejected bridge version, missing service, or unsupported adapter capability.
+- Keep `strict_restore = true` when incomplete container or actor restoration is unacceptable.
+
 ## Upgrading
 
 See [INSTALL.md](INSTALL.md) for the clean wheel-upgrade procedure and capacity guidance. Keep the existing plugin data directory and database, but remove old wheel and cached package copies before starting the new version.
@@ -474,7 +514,7 @@ Build the wheel:
 python -m build --wheel
 ```
 
-The current release passes 65 automated tests covering codec integrity, database chunking, streaming records, bounded-memory planning, chunk residency, write verification, history, exports, disconnect-safe jobs, and watchdog-safe paste yielding.
+The current release passes 72 automated tests covering NSCM v1/v2 compatibility, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, bounded-memory planning, rotation, chunk residency, write verification, metadata-aware history, exports, disconnect-safe jobs, and watchdog-safe paste yielding.
 
 ## License
 
