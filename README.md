@@ -1,17 +1,412 @@
-# Ninj-OS Schematic Cloud
+<!-- endstone-professional-header:start -->
+<p align="center">
+  <img src="docs/assets/banner.svg" width="100%" alt="Ninj-OS Schematic Cloud — streamed cross-server blueprints for Minecraft Bedrock">
+</p>
 
-Ninj-OS Schematic Cloud is an **Endstone API 0.11** Python plugin for saving, sharing, previewing, rotating, confirming, pasting, undoing, archiving, and exporting Minecraft Bedrock structures.
+<p align="center">
+  <a href="https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TheNINJALLO/endstone-schematic-cloud?display_name=tag&amp;style=for-the-badge&amp;label=Release"></a>
+  <a href="https://github.com/TheNINJALLO/endstone-schematic-cloud/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/TheNINJALLO/endstone-schematic-cloud/total?style=for-the-badge&amp;label=Downloads"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/TheNINJALLO/endstone-schematic-cloud?style=for-the-badge"></a>
+</p>
 
-Current release: **v1.6.1**, with watchdog-safe large-paste scheduling and deferred chunk release.
+<p align="center">
+  <img alt="Endstone API 0.11" src="https://img.shields.io/badge/Endstone_API-0.11-52b7a8?style=flat-square">
+  <img alt="Bedrock 26.x" src="https://img.shields.io/badge/Bedrock-26.x-63b8ff?style=flat-square">
+  <img alt="Python 3.10 or newer" src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white">
+  <img alt="MySQL 8 or MariaDB 10.5" src="https://img.shields.io/badge/MySQL_8%2B%20%7C%20MariaDB_10.5%2B-f2b84b?style=flat-square&amp;logo=mysql&amp;logoColor=white">
+</p>
 
-The primary library remains the remote MySQL database so every connected server sees new blueprints immediately. The plugin can also write two disk formats:
+<p align="center">
+  <strong>Save once. Preview, paste, back up, and export anywhere in your Endstone network.</strong>
+</p>
 
-- **Native NSCM**: exact compressed cloud payload for lossless Ninj-OS backup and restore.
-- **Sponge Schematic v3 (`.schem`)**: portable export for modern WorldEdit and Amulet.
+<p align="center">
+  <a href="#overview">Overview</a> &bull;
+  <a href="#quick-start">Quick start</a> &bull;
+  <a href="#how-to-use-it">How to use</a> &bull;
+  <a href="#commands">Commands</a> &bull;
+  <a href="#configuration">Configuration</a> &bull;
+  <a href="#large-schematic-safety">Large builds</a> &bull;
+  <a href="https://github.com/TheNINJALLO/endstone-schematic-cloud/releases">Releases</a>
+</p>
+<!-- endstone-professional-header:end -->
 
-## Bounded-memory saves and pastes
+## Overview
 
-Version 1.6.0 changes the large-schematic pipeline from whole-payload memory copies to spillable streams. Small operations remain in RAM; large record buffers cross an 8 MiB threshold and continue in temporary files. Compression, MySQL transfer, decompression, rotated planning, undo capture, and native disk export then consume those files in bounded pieces.
+Ninj-OS Schematic Cloud is an Endstone plugin for capturing Minecraft Bedrock structures and sharing them through a central MySQL or MariaDB library. Builders can select a region, upload it once, then load, preview, rotate, and paste it on any connected server using commands or in-game forms.
+
+The plugin is designed for large builds:
+
+- Streams large records through temporary files instead of keeping several full copies in memory.
+- Stores compressed payloads in packet-safe, checksum-verified database chunks.
+- Divides world reads and writes across server ticks.
+- Applies a real-time paste budget to protect the Bedrock main thread.
+- Holds and verifies each chunk before reading or writing it.
+- Supports undo and redo within configurable history limits.
+- Continues active world operations if the initiating player disconnects.
+- Exports lossless native backups and Sponge Schematic v3 files for WorldEdit or Amulet.
+
+```mermaid
+flowchart LR
+    A[Select a build] --> B[Stream and verify]
+    B --> C[(Shared MySQL library)]
+    C --> D[Load on any server]
+    D --> E[Preview and rotate]
+    E --> F[Chunk-safe paste]
+    C --> G[Native NSCM backup]
+    C --> H[WorldEdit / Amulet export]
+```
+
+## Quick start
+
+### Requirements
+
+| Component | Supported |
+|---|---|
+| Endstone API | `0.11` |
+| Minecraft Bedrock / BDS | `26.x` |
+| Python | `3.10+` |
+| Database | MySQL `8.0+` or MariaDB `10.5+` |
+| Plugin release | `v1.6.1` |
+
+### 1. Download and install
+
+Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
+
+```bash
+gh release download v1.6.1 \
+  --repo TheNINJALLO/endstone-schematic-cloud \
+  --pattern "*.whl"
+```
+
+Stop the server, remove every older `endstone_ninjos_schematics-*.whl`, place the new wheel in the top-level `plugins/` directory, and start Endstone once so the default configuration is created.
+
+> [!IMPORTANT]
+> Replace the wheel while the server is fully stopped. Do not use `/reload` for wheel upgrades.
+
+### 2. Create the database
+
+Edit the host and password placeholders in [database/create_database_example.sql](database/create_database_example.sql), then run it as a database administrator:
+
+```bash
+mysql -u root -p < database/create_database_example.sql
+```
+
+The plugin can create and upgrade its own tables when `auto_create_schema = true`; the database account still needs the permissions shown in the example SQL file.
+
+### 3. Configure the connection
+
+Open the generated plugin `config.toml` and set the database connection:
+
+```toml
+[database]
+host = "10.0.0.25"
+port = 3306
+user = "schematics"
+password = "replace-with-a-strong-password"
+database = "ninjos_schematics"
+namespace = "global"
+table_prefix = "ninjos_"
+auto_create_schema = true
+
+[server]
+server_id = "survival-1"
+```
+
+For multiple servers:
+
+- Point every server at the same database.
+- Use the same `database.namespace` for servers that should share a library.
+- Give every server a unique `server.server_id` for audit metadata.
+- Keep database credentials in each server's local configuration, never in Git.
+
+Environment variables can override sensitive connection values:
+
+| Variable | Setting |
+|---|---|
+| `NINJOS_SCHEM_DB_HOST` | Database host |
+| `NINJOS_SCHEM_DB_PORT` | Database port |
+| `NINJOS_SCHEM_DB_USER` | Database user |
+| `NINJOS_SCHEM_DB_PASSWORD` | Database password |
+| `NINJOS_SCHEM_DB_NAME` | Database name |
+| `NINJOS_SCHEM_DB_SSL_CA` | CA certificate path |
+| `NINJOS_SCHEM_NAMESPACE` | Shared library namespace |
+
+### 4. Verify the installation
+
+Restart Endstone and run:
+
+```text
+/schem version
+/schem dbtest
+/schem status
+```
+
+The startup log for this release contains:
+
+```text
+Enabled v1.6.1 build=large-paste-watchdog-safety-20260904
+```
+
+## Access control
+
+Every player-facing action requires either server operator status or the configured scoreboard tag. The default tag is `architect`:
+
+```mcfunction
+/tag <player> add architect
+/tag <player> remove architect
+```
+
+Change it in `config.toml` if your network uses another role:
+
+```toml
+[access]
+architect_tag = "architect"
+denied_message = "Only server operators and players with the architect tag can use Ninj-OS Schematics."
+```
+
+The console may run `/schem version` and `/schem dbtest`; placement and library workflows require an authorized in-game player.
+
+## How to use it
+
+The easiest entry point is:
+
+```text
+/schem menu
+```
+
+The form UI covers selection saving, cloud browsing, placement, undo/redo, diagnostics, tools, and active-job cancellation.
+
+### Save a structure to the cloud
+
+1. Set both selection corners:
+
+   ```text
+   /schem pos1
+   /schem pos2
+   ```
+
+   Running these commands without coordinates uses your current block position. You can also provide exact coordinates, for example `/schem pos1 -32 64 48`.
+
+2. Confirm the selection with `/schem status`.
+3. Save it:
+
+   ```text
+   /schem save castle-gate true false
+   ```
+
+   The optional arguments are `include_air` and `overwrite`.
+
+   - `include_air = true` stores the complete selected volume. When pasted, saved air clears destination blocks.
+   - `include_air = false` creates a sparse schematic and leaves unspecified destination blocks untouched.
+   - `overwrite = true` replaces an existing cloud entry with the same normalized name.
+
+4. Watch `/schem status` while the selection is scanned, compressed, uploaded, and verified.
+
+Schematic names normalize to lowercase and may contain letters, numbers, dots, underscores, and dashes. Names are limited to 64 characters.
+
+### Load, position, and paste a structure
+
+1. Browse the shared library:
+
+   ```text
+   /schem list
+   /schem list castle
+   ```
+
+2. Download a schematic:
+
+   ```text
+   /schem load castle-gate
+   ```
+
+3. Move and rotate the preview:
+
+   ```text
+   /schem anchor
+   /schem rotate cw
+   /schem preview
+   ```
+
+   `/schem anchor` uses your current position. Exact coordinates are also supported.
+
+4. Review the confirmation screen with `/schem paste`.
+5. Start the paste with `/schem confirm`.
+6. Use `/schem status` to monitor progress. Use `/schem cancel` to stop the job or `/schem undo` after completion.
+
+> [!NOTE]
+> Paste, undo, and redo jobs continue if the initiating player disconnects. Reconnect with the same account to view status or cancel the operation.
+
+### Use the optional in-game tools
+
+Activate both packs from `addon/` on the world, then run:
+
+```text
+/schem tools
+```
+
+| Tool | Interaction |
+|---|---|
+| Selection Wand | Left-click a block for position 1; right-click for position 2 |
+| Placement Anchor | Right-click a block to move the loaded schematic |
+| Rotator | Right-click to rotate the current placement clockwise |
+| Cloud Tablet | Right-click to open the main menu |
+| Undo Tool | Right-click to undo |
+| Redo Tool | Right-click to redo |
+| Confirm Tool | Right-click to confirm the current paste |
+
+Commands remain available if you choose not to install the add-on packs.
+
+### Back up or export a cloud schematic
+
+Native backups preserve the exact cloud payload:
+
+```text
+/schem export castle-gate
+```
+
+WorldEdit and Amulet exports use Sponge Schematic v3:
+
+```text
+/schem export-worldedit castle-gate
+```
+
+| Format | Extension | Intended use |
+|---|---|---|
+| Native NSCM | `.nscm` | Lossless Ninj-OS backup and database-level recovery |
+| Sponge Schematic v3 | `.schem` | Modern WorldEdit and Amulet workflows |
+
+The Sponge exporter preserves dimensions, the block palette, mapped states, author metadata, source server, and origin. The current Endstone API does not expose a stable generic serializer for block-entity NBT, so container inventories, sign text, command-block commands, lectern books, spawner data, entities, and biomes are not exported.
+
+> [!CAUTION]
+> `/schem remove` permanently deletes a cloud row and its payload for every connected server. Prefer `/schem backup-remove` when a recoverable native copy is required. `/schem archive` hides an entry without deleting its database row.
+
+## Commands
+
+All aliases reach the same centralized operator-or-architect access check.
+
+### Selection and menu
+
+| Command | What it does |
+|---|---|
+| `/schem menu` | Opens the main form UI. Aliases: `ui`, `form` |
+| `/schem pos1 [x y z]` | Sets selection corner one. Alias: `p1` |
+| `/schem pos2 [x y z]` | Sets selection corner two. Alias: `p2` |
+| `/schem selection` | Displays selection and job status. Alias: `sel` |
+| `/schem clearselection` | Clears the current selection and outline. Alias: `clearsel` |
+| `/schem tools` | Gives the optional add-on tools |
+
+### Cloud library and storage
+
+| Command | What it does |
+|---|---|
+| `/schem save <name> [include_air] [overwrite]` | Scans and uploads the current selection |
+| `/schem list [search]` | Browses or searches active cloud entries. Alias: `browse` |
+| `/schem load <name>` | Downloads, validates, and previews a cloud schematic |
+| `/schem export <name> [overwrite]` | Writes a native `.nscm` backup. Aliases: `download`, `disk-save` |
+| `/schem export-worldedit <name> [overwrite]` | Writes a Sponge v3 `.schem`. Aliases: `worldedit`, `amulet`, `sponge-v3` |
+| `/schem diskpath` | Displays the configured native backup directory |
+| `/schem worldeditpath` | Displays the configured Sponge export directory |
+| `/schem backup-remove <name> [overwrite]` | Verifies a native backup, then permanently removes the MySQL entry. Alias: `export-remove` |
+| `/schem remove <name>` | Permanently removes an entry and its payload. Alias: `delete` |
+| `/schem archive <name>` | Hides an entry while retaining its database row |
+
+### Placement and history
+
+| Command | What it does |
+|---|---|
+| `/schem anchor [x y z]` | Moves the loaded schematic anchor; defaults to your position |
+| `/schem rotate [0\|90\|180\|270\|cw\|ccw]` | Sets or changes placement rotation |
+| `/schem preview` | Refreshes the particle bounding box |
+| `/schem paste` | Opens placement confirmation. Alias: `place` |
+| `/schem confirm` | Builds the paste plan and begins placement. Alias: `commit` |
+| `/schem undo` | Reverts the last completed or recorded partial paste |
+| `/schem redo` | Reapplies the last undone paste |
+| `/schem cancel` | Cancels the active scan, preparation, paste, or preview |
+
+### Diagnostics
+
+| Command | What it does | Console |
+|---|---|:---:|
+| `/schem status` | Shows database, storage, selection, placement, history, and job status | No |
+| `/schem dbtest` | Tests the configured MySQL/MariaDB connection | Yes |
+| `/schem version` | Shows the loaded version, build ID, and module path. Alias: `ver` | Yes |
+| `/schem help` | Displays command help. Alias: `?` | No |
+
+## Configuration
+
+The packaged [config.toml](src/endstone_ninjos_schematics/config.toml) is the complete reference. Existing runtime files are merged with newly introduced defaults without replacing administrator values.
+
+| Section | Controls |
+|---|---|
+| `[database]` | Connection, namespace, payload chunking, retries, timeouts, TLS, and schema creation |
+| `[server]` | Unique source-server identifier |
+| `[disk]` | Native `.nscm` backup location and limits |
+| `[worldedit]` | Sponge v3 export location, Java data version, and reports |
+| `[access]` | Operator-or-scoreboard-tag authorization |
+| `[performance]` | Scan/paste budgets, chunk loading, physics, verification, and progress |
+| `[streaming]` | Spill threshold, temporary workspace, disk reserve, and cleanup |
+| `[schematics]` | Default air and overwrite choices |
+| `[placement]` | Missing custom-block behavior |
+| `[preview]` | Selection and placement particles |
+| `[history]` | Undo/redo operation and block limits |
+| `[tools]` | Custom item identifiers and interaction debounce |
+
+### Missing custom blocks
+
+A cloud schematic may reference a custom block that is not registered on the destination server:
+
+```toml
+[placement]
+missing_block_policy = "skip"
+missing_block_fallback = "minecraft:stone"
+missing_block_report_limit = 20
+```
+
+Available policies:
+
+- `skip`: leave the destination block unchanged.
+- `air`: substitute air.
+- `fallback`: use `missing_block_fallback`.
+- `abort`: stop on the first missing block.
+
+Exact restoration requires the same behavior packs and block identifiers on source and destination servers.
+
+## Large schematic safety
+
+v1.6.1 protects long-running pastes with both a record limit and a wall-clock limit:
+
+```toml
+[performance]
+scan_blocks_per_tick = 2500
+paste_blocks_per_tick = 1200
+paste_time_budget_ms = 10
+max_blocks_per_schematic = 2000000
+apply_physics = false
+skip_unchanged_blocks = true
+auto_load_missing_chunks = true
+chunk_load_timeout_ticks = 1200
+chunk_stabilize_ticks = 4
+verify_paste_writes = true
+max_paste_failures = 0
+```
+
+Paste work yields when either `paste_blocks_per_tick` or `paste_time_budget_ms` is reached. The time limit prevents state-heavy or slow chunks from monopolizing a server tick even when fewer than 1,200 records were processed.
+
+Newer Endstone runtimes use native chunk loading and deferred release. Older API 0.11 runtimes fall back to temporary preloaded ticking areas:
+
+```toml
+[performance]
+legacy_tickingarea_fallback = true
+legacy_tickingarea_preload = true
+legacy_tickingarea_max_active = 8
+```
+
+Bedrock permits at most ten ticking areas per world, so the default leaves two slots for administrators. Cheats must be enabled when this legacy fallback is required.
+
+### Temporary workspace capacity
+
+Each stored record uses 16 bytes before compression. Large operations spill to disk:
 
 ```toml
 [streaming]
@@ -24,201 +419,63 @@ minimum_free_disk_mb = 1024
 cleanup_orphans_on_startup = true
 ```
 
-A 16,000,000-record full-volume schematic contains about 244 MiB of raw fixed-width records. Earlier builds could hold several complete copies at once. v1.6.0 keeps the bulk data on disk and checks workspace capacity before starting. Undo is automatically omitted for an individual paste above `history.max_blocks_per_operation`, preventing two additional full record streams unless the administrator explicitly raises that ceiling.
+Approximate temporary-space planning:
 
-## Packet-safe MySQL payload storage
+- Save: about 32 bytes per selected block plus 64 MiB.
+- Load/paste without undo: about 32 bytes per stored record plus the compressed payload.
+- Load/paste with undo: about 64 bytes per stored record plus the compressed payload.
 
-Version 1.6.0 keeps schematic metadata in the original `ninjos_schematics` table and stores large compressed payloads in packet-safe rows in `ninjos_schematic_payload_chunks`. Existing inline `LONGBLOB` records remain readable.
+Undo is automatically disabled for an individual paste above `history.max_blocks_per_operation`. Raise that limit only when the temporary disk has room for both before and after streams.
 
-```toml
-[database]
-connect_timeout_seconds = 10
-read_timeout_seconds = 120
-write_timeout_seconds = 120
-payload_chunk_size_mb = 2
-inline_payload_max_mb = 2
-retry_attempts = 3
-retry_backoff_seconds = 2.0
+## Troubleshooting
+
+### Database reports unavailable
+
+1. Run `/schem dbtest`.
+2. Confirm the host, port, database, user, and namespace.
+3. Verify firewall access from the Minecraft server to the database.
+4. Confirm the account has the permissions from `database/create_database_example.sql`.
+5. For TLS connections, verify `ssl_ca` or `NINJOS_SCHEM_DB_SSL_CA`.
+
+### A chunk will not load
+
+- Keep `auto_load_missing_chunks = true`.
+- Increase `chunk_load_timeout_ticks` for slow storage or newly generated areas.
+- On older Endstone builds, enable cheats and confirm the console can run `/tickingarea`.
+- Avoid consuming all ten Bedrock ticking-area slots with unrelated systems.
+
+### Large paste performance
+
+- Keep `paste_time_budget_ms = 10` as the first safety setting.
+- Do not raise both paste limits aggressively on a production server.
+- Leave physics disabled for bulk placement unless block-update behavior is required.
+- Place the streaming workspace on fast local storage with adequate free space.
+- Use `/schem status` to distinguish preparation, chunk waiting, and active placement.
+
+### A custom block is skipped
+
+Install the same behavior pack used by the source server, or select an intentional `missing_block_policy`. The completion message and server log report unavailable identifiers.
+
+## Upgrading
+
+See [INSTALL.md](INSTALL.md) for the clean wheel-upgrade procedure and capacity guidance. Keep the existing plugin data directory and database, but remove old wheel and cached package copies before starting the new version.
+
+## Development
+
+Run the test suite:
+
+```bash
+python -m pytest -q
 ```
 
-Uploads are transactional. The plugin verifies the chunk count and byte count before commit. Downloads verify each chunk hash and the complete schematic hash while streaming to disk. This avoids sending a multi-million-block schematic as one oversized MySQL packet.
+Build the wheel:
 
-## Missing custom block policy
-
-A schematic may reference a custom block whose behavior pack is missing or whose identifier changed on the destination server. v1.6.0 caches unavailable palette entries and applies a configurable policy instead of repeatedly throwing the same registry exception.
-
-```toml
-[placement]
-missing_block_policy = "skip"
-missing_block_fallback = "minecraft:stone"
-missing_block_report_limit = 20
+```bash
+python -m build --wheel
 ```
 
-Policies are `skip`, `air`, `fallback`, and `abort`. Exact restoration still requires the same behavior pack and block identifiers on the destination server.
+The current release passes 65 automated tests covering codec integrity, database chunking, streaming records, bounded-memory planning, chunk residency, write verification, history, exports, disconnect-safe jobs, and watchdog-safe paste yielding.
 
-## Verified chunk residency for very large builds
+## License
 
-Version 1.4.0 and newer hold every source and destination chunk before it reads or writes blocks. Newer Endstone builds use native chunk tickets. Older 0.11 runtimes, including builds that expose `Dimension.name` and `Dimension.loaded_chunks` but not `load_chunk`, use a temporary preloaded Bedrock ticking area for one chunk at a time.
-
-The plugin no longer trusts a chunk merely because a player happens to be near it. It acquires its own ticket, waits for the chunk to report loaded, waits a stabilization delay, performs the batch, verifies residency again, and only then releases the ticket. Save regions are rolled back and rescanned if residency drops. Paste writes are read back and verified.
-
-```toml
-[performance]
-auto_load_missing_chunks = true
-chunk_load_timeout_ticks = 1200
-chunk_stabilize_ticks = 4
-max_chunk_retries = 3
-legacy_tickingarea_fallback = true
-legacy_tickingarea_preload = true
-legacy_tickingarea_prefix = "njs_schem"
-legacy_tickingarea_max_active = 8
-verify_paste_writes = true
-max_paste_failures = 0
-```
-
-Bedrock permits up to 10 ticking areas per world, so the default reserves at most eight temporary plugin slots and leaves room for administrator-created areas. Temporary names are journaled and cleaned on job completion or targeted crash recovery after an unclean shutdown. Cheats must be enabled for the legacy fallback because `/tickingarea` is a Game Directors command.
-
-A v1.3.0-or-earlier cloud entry that was captured while chunks were unloaded cannot be repaired from its checksum. Re-save the original world region with v1.4.0 or newer.
-
-## Access policy
-
-Every player-facing path uses one centralized role check. A player must be either a server operator or carry the scoreboard tag `architect`.
-
-```text
-/tag <player> add architect
-/tag <player> remove architect
-```
-
-Unauthorized players are rejected before forms, tools, previews, world edits, disk access, export conversion, or database operations run.
-
-## Cloud library actions
-
-Select a cloud schematic to access:
-
-- **Load and Preview**
-- **Save Native Copy to Disk**
-- **Export WorldEdit / Amulet (`.schem`)**
-- **Save to Disk + Remove from MySQL**
-- **Remove from MySQL**
-- **Archive in MySQL**
-
-Native exports preserve the exact NSCM payload. WorldEdit/Amulet exports decode the cloud payload off-thread and produce gzip-compressed big-endian NBT following Sponge Schematic v3.
-
-## WorldEdit and Amulet export
-
-Default configuration:
-
-```toml
-[worldedit]
-enabled = true
-directory = "worldedit_schematics"
-java_data_version = 4671
-overwrite_exports = true
-write_conversion_report = true
-max_file_size_mb = 1024
-```
-
-A relative directory is created below the plugin data folder. An absolute directory may point directly at a shared or mounted WorldEdit schematic folder.
-
-Each export can create:
-
-```text
-castle.schem
-castle.schem.conversion.json
-```
-
-The conversion report records remapped identifiers, stripped Bedrock-only state names, and warnings. It is especially useful because Bedrock and Java do not use identical block-state schemas.
-
-### Fidelity boundary
-
-The `.schem` exporter preserves the structure dimensions, block palette, mapped block states, author metadata, source server, and origin offset. Endstone API 0.11 does not expose a stable generic serializer for block-entity NBT, so these are not exported yet:
-
-- Container inventories
-- Sign text
-- Command-block commands
-- Lectern books
-- Spawner data
-- Entities and biomes
-
-Unknown Bedrock-only vanilla state names are stripped rather than emitting invalid Java properties. The report identifies them. Custom namespaces retain syntactically safe properties to give matching Java mods or data packs a chance to resolve them.
-
-A native schematic saved without air is sparse. Sponge schematics require a complete volume, so missing positions are written as air and a warning is placed in the conversion report.
-
-## Native disk backups
-
-Fresh installations default to `.nscm` so native files are not confused with WorldEdit `.schem` files:
-
-```toml
-[disk]
-enabled = true
-directory = "schematics"
-extension = ".nscm"
-auto_create_directory = true
-write_metadata_sidecar = true
-overwrite_cloud_exports = true
-max_file_size_mb = 512
-```
-
-Existing configurations that already use `.schem` are preserved by automatic config migration. Those older native files are still NSCM payloads and are **not** WorldEdit files.
-
-## Commands
-
-```text
-/schem menu
-/schem pos1 [x y z]
-/schem pos2 [x y z]
-/schem clearselection
-/schem save <name> [include_air] [overwrite]
-/schem list [search]
-/schem load <name>
-/schem export <name> [overwrite]
-/schem export-worldedit <name> [overwrite]
-/schem worldeditpath
-/schem backup-remove <name> [overwrite]
-/schem remove <name>
-/schem archive <name>
-/schem diskpath
-/schem anchor [x y z]
-/schem rotate [0|90|180|270|cw|ccw]
-/schem preview
-/schem paste
-/schem confirm
-/schem undo
-/schem redo
-/schem tools
-/schem status
-/schem cancel
-/schem dbtest
-/schem version
-```
-
-Aliases for WorldEdit export include `/schem worldedit`, `/schem amulet`, and `/schem sponge-v3`.
-
-## Performance model
-
-World reads and writes stay on the Endstone server thread and are divided across ticks. Compression, decompression, MySQL work, native disk I/O, Sponge conversion, gzip/NBT writing, and paste planning run in the bounded worker pool.
-
-Default limits:
-
-- Save scan: 2,500 blocks per tick
-- Paste, undo, and redo: up to 1,200 blocks or 10 ms per tick, whichever comes first
-- Maximum selection: 2,000,000 blocks
-- Worker threads: 2
-- Physics during bulk placement: disabled
-- Unchanged destination blocks: skipped
-
-## Automatic config migration
-
-At startup, v1.6.1 recursively adds missing settings from the packaged defaults while preserving existing MySQL credentials, paths, limits, and customized values. Exact legacy defaults for the MySQL read/write timeout are migrated from 30 to 120 seconds; administrator-selected values are preserved.
-
-Large pastes also release native Endstone chunk holds through the deferred unload API when it is available. Active scans, pastes, undo, and redo operations continue if their initiating player disconnects; reconnect and use `/schem status` or `/schem cancel` as needed.
-
-## Compatibility
-
-- Endstone API: `0.11`
-- Python: 3.10+
-- Designed for Bedrock/Endstone 26.x, including 26.30-era servers
-- MySQL 8.0+ or MariaDB 10.5+
-- Export format: Sponge Schematic v3
-
-See [INSTALL.md](INSTALL.md) for clean upgrade instructions.
+Released under the [MIT License](LICENSE).

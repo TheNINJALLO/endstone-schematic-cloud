@@ -25,6 +25,7 @@ SOURCE_ROOTS = [
     "scripts",
     "database",
     "addon",
+    "docs",
 ]
 SOURCE_FILES = [
     "pyproject.toml",
@@ -88,6 +89,7 @@ def main() -> None:
         shutil.copy2(ROOT / filename, staging / filename)
     shutil.copy2(sums_path, staging / sums_path.name)
     shutil.copytree(ROOT / "database", staging / "database")
+    shutil.copytree(ROOT / "docs", staging / "docs")
     shutil.copytree(ROOT / "scripts", staging / "scripts")
     with zipfile.ZipFile(release_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(staging.rglob("*")):
