@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.3 - 2026-09-13
+
+- Added the native `blockdata_api` plugin as an optional load dependency.
+- Retry unavailable BlockData detection on the next tick after startup and every 100 ticks afterward. Defer connection while saves or pastes are active so metadata handling stays consistent within each operation.
+- Avoid repeated warnings for an unchanged detection error; log the installed API version and adapter when connection succeeds.
+- Identify missing, disabled, or unregistered native providers and include the imported API version in missing-service diagnostics. Identify the active adapter when block-entity NBT support is absent.
+- Clarified that Schematic Cloud uses the installed compatible provider without a release-number pin or automatic download; `v2` is the service ABI.
+- Passed 112 tests, including delayed provider registration, retry pacing, active-job deferral, provider diagnostics, and release-independent compatibility. Live server detection still requires checking the installed native plugin and startup log.
+
 ## 1.7.2 - 2026-09-13
 
 - Fixed paste starvation when chunk residency checks consume the whole 10 ms work budget before placement starts. A confirmed resident chunk now permits one record before yielding.

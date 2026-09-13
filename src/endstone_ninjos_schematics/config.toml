@@ -148,6 +148,8 @@ max_total_blocks_per_player = 2000000
 # installed, canonical block-entity NBT and container inventories are embedded
 # in NSCM v2 saves and restored after the base block is placed. The integration
 # is optional so the schematic plugin can still run on servers without it.
+# Failed detection retries after startup and every 100 ticks while saves and
+# pastes are idle. This uses the installed provider and does not download updates.
 enabled = true
 # Stop a paste if retained data cannot be restored instead of silently placing
 # only the base block. Disable this only when best-effort metadata is preferred.

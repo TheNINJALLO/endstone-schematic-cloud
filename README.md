@@ -69,7 +69,7 @@ flowchart LR
 | Minecraft Bedrock / BDS | `26.x` |
 | Python | `3.10+` |
 | Database | MySQL `8.0+` or MariaDB `10.5+` |
-| Plugin release | `v1.7.2` |
+| Plugin release | `v1.7.3` |
 | Block metadata | Optional matching [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) release |
 
 ### 1. Download and install
@@ -77,7 +77,7 @@ flowchart LR
 Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
 
 ```bash
-gh release download v1.7.2 \
+gh release download v1.7.3 \
   --repo TheNINJALLO/endstone-schematic-cloud \
   --pattern "*.whl"
 ```
@@ -153,7 +153,7 @@ Restart Endstone and run:
 The startup log for this release contains:
 
 ```text
-Enabled v1.7.2 build=paste-progress-budget-20260913
+Enabled v1.7.3 build=blockdata-startup-retry-20260913
 ```
 
 If BlockData is installed, startup also reports its API version and active adapter. `/schem status` shows `BlockData retention: Ready`.
@@ -251,6 +251,10 @@ Schematic names normalize to lowercase and may contain letters, numbers, dots, u
 
 Install the native plugin and matching platform/Python bridge from the same [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api/releases) release as the running BDS and Endstone build. Restart the server; do not mix bridge and native-plugin versions.
 
+Schematic Cloud uses the installed Python API and live bridge; it neither pins a BlockData release number nor downloads the latest release. The `v2` in `endstone:blockdata:v2` identifies the service ABI, not the BlockData package version. The plugin's `api_version = "0.11"` refers to Endstone.
+
+The native `blockdata_api` plugin is an optional load dependency. If detection fails during startup, Schematic Cloud retries on the next tick, then every 100 ticks while no save or paste is active. It reports the connected API version and adapter when detection succeeds. An unavailable-service error identifies whether the native plugin is missing, disabled, or loaded without its service; installing only the Python package does not provide the native service.
+
 When the live `endstone:blockdata:v2` service is available, a cloud save captures coordinate-free canonical actor NBT and occupied container slots into the sparse NSCM v2 metadata section. Paste performs these operations on the primary thread:
 
 1. Capture destination metadata for undo.
@@ -264,7 +268,7 @@ Typed NBT byte, short, long, and float values are preserved. Metadata coordinate
 The integration is optional for ordinary blocks. If it is unavailable, block types and states still save and paste normally. A schematic that actually contains retained metadata requires BlockData on the destination while strict restoration is enabled.
 
 > [!IMPORTANT]
-> NSCM v1 cloud rows and backups remain readable in v1.7.2. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
+> NSCM v1 cloud rows and backups remain readable in v1.7.3. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
 
 ### Use the optional in-game tools
 
@@ -406,7 +410,7 @@ Exact restoration requires the same behavior packs and block identifiers on sour
 
 ## Large schematic safety
 
-v1.7.2 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
+v1.7.3 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
 
 ```toml
 [performance]
@@ -503,6 +507,7 @@ Install the same behavior pack used by the source server, or select an intention
 - Match that bundle to the exact BDS and Endstone versions shown in the BlockData release.
 - Fully restart instead of using `/reload`.
 - Check the startup warning and `/schem status` for the rejected bridge version, missing service, or unsupported adapter capability.
+- Detection retries automatically when saves and pastes are idle. A service that remains missing requires checking the native `blockdata_api` startup log; retries cannot repair a missing or incompatible binary.
 - Keep `strict_restore = true` when incomplete container or actor restoration is unacceptable.
 
 ## Upgrading
@@ -523,7 +528,7 @@ Build the wheel:
 python -m build --wheel
 ```
 
-The current release passes 101 automated tests covering NSCM v1/v2 compatibility, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, contiguous bounded-memory planning, all rotations, delayed new-world chunk generation, shared paste limits, scheduler fairness, write verification, metadata-aware history, exports, disconnect-safe jobs, and paste yielding. Live BDS/client crash validation remains an on-server check.
+The current release passes 112 automated tests covering NSCM v1/v2 compatibility, BlockData startup recovery and diagnostics, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, contiguous bounded-memory planning, all rotations, delayed new-world chunk generation, shared paste limits, scheduler fairness, write verification, metadata-aware history, exports, disconnect-safe jobs, and paste yielding. Live BDS/client crash validation remains an on-server check.
 
 ## License
 

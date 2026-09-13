@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.7.2 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.7.3 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.7.2-py3-none-any.whl
+endstone_ninjos_schematics-1.7.3-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,14 +23,20 @@ endstone_ninjos_schematics-1.7.2-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.7.2 build=paste-progress-budget-20260913
+Enabled v1.7.3 build=blockdata-startup-retry-20260913
 ```
 
-The upgrade adds `performance.paste_adaptive_pacing = true` and migrates the old v1.7.1 default change limit from 256 to 1,200. Adaptive pacing starts at 256, increases on healthy ticks, and backs off on lag. Other custom change limits are preserved; disabling adaptive pacing also preserves a fixed 256 limit. Keep the 10 ms paste time budget. `/schem status` now shows records/sec, chunk-check and placement times, wait ticks, and current/maximum change limits. No database or add-on update is required when upgrading from v1.7.0 or v1.7.1.
+This upgrade adds optional BlockData load ordering, automatic connection retries, and clearer native-service diagnostics. No database, configuration, or add-on change is required when upgrading from v1.7.2.
+
+Upgrades from v1.7.1 also receive `performance.paste_adaptive_pacing = true` and migrate the old default change limit from 256 to 1,200. Adaptive pacing starts at 256, increases on healthy ticks, and backs off on lag. Other custom change limits are preserved; disabling adaptive pacing also preserves a fixed 256 limit. Keep the 10 ms paste time budget. `/schem status` shows records/sec, chunk-check and placement times, wait ticks, and current/maximum change limits.
 
 ## Optional BlockData retention
 
 To preserve supported block-entity NBT and container inventories, install the native plugin and matching platform-specific CPython bridge from one [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api/releases) release bundle. That bundle must match the running BDS and Endstone versions exactly.
+
+Schematic Cloud detects the installed package; it does not download updates or require a fixed BlockData release number. `endstone:blockdata:v2` is the service ABI name, separate from the package version. Installing only the Python API/bridge is insufficient: the native `blockdata_api` plugin must enable and register that service.
+
+The native plugin is an optional load dependency. Failed detection retries on the next server tick and then every 100 ticks, deferred while saves or pastes are active. The unavailable-service error now distinguishes a missing native plugin, a disabled plugin, and a plugin with no registered service. Check the native startup log if the error persists.
 
 After a full restart, startup should report the BlockData API version and adapter. Confirm in game:
 
@@ -49,7 +55,7 @@ max_uncompressed_mb = 64
 
 `strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
 
-Existing NSCM v1 rows remain readable. v1.7.2 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
+Existing NSCM v1 rows remain readable. v1.7.3 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 

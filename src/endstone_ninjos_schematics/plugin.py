@@ -71,8 +71,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.7.2"
-BUILD_ID = "paste-progress-budget-20260913"
+PLUGIN_VERSION = "1.7.3"
+BUILD_ID = "blockdata-startup-retry-20260913"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -84,6 +84,7 @@ class NinjOSSchematicsPlugin(Plugin):
     version = PLUGIN_VERSION
     api_version = "0.11"
     authors = ["Ninj-OS"]
+    soft_depend = ["blockdata_api"]
 
     commands = {
         "schem": {
@@ -312,21 +313,9 @@ class NinjOSSchematicsPlugin(Plugin):
         ) * 1024 * 1024
         self._blockdata: BlockDataIntegration | None = None
         self._blockdata_error = "disabled in config.toml"
-        if self._blockdata_enabled:
-            try:
-                self._blockdata = BlockDataIntegration.connect(self.server)
-                self._blockdata_error = ""
-                self.logger.info(
-                    f"BlockData API v{self._blockdata.api_version} connected through "
-                    f"adapter={self._blockdata.adapter_name}; block-entity and container data "
-                    "will be retained in native NSCM saves."
-                )
-            except Exception as exc:
-                self._blockdata_error = str(exc)
-                self.logger.warning(
-                    "BlockData integration is unavailable; base block types and states will "
-                    f"still work, but block-entity data will not be retained: {exc}"
-                )
+        self._blockdata_next_retry_tick = 0
+        self._blockdata_last_logged_error: str | None = None
+        self._refresh_blockdata()
 
         tools = self.config.get("tools", {})
         self.tool_ids = {
@@ -623,10 +612,47 @@ class NinjOSSchematicsPlugin(Plugin):
     # Main tick loop
     # ------------------------------------------------------------------
 
+    def _refresh_blockdata(self) -> None:
+        """Connect an optional provider after startup, without changing active jobs."""
+        if (
+            not getattr(self, "_blockdata_enabled", False)
+            or getattr(self, "_stopping", False)
+            or getattr(self, "_blockdata", None) is not None
+        ):
+            return
+        if self._tick_counter < getattr(self, "_blockdata_next_retry_tick", 0):
+            return
+        # Retry the initial failure on the next tick, after other on_enable calls.
+        # Subsequent probes are limited to once every five seconds at 20 TPS.
+        self._blockdata_next_retry_tick = self._tick_counter + (1 if self._tick_counter == 0 else 100)
+        if getattr(self, "save_jobs", {}) or getattr(self, "paste_jobs", {}):
+            return
+        try:
+            integration = BlockDataIntegration.connect(self.server)
+        except Exception as exc:
+            self._blockdata_error = str(exc)
+            if self._blockdata_error != getattr(self, "_blockdata_last_logged_error", None):
+                self._blockdata_last_logged_error = self._blockdata_error
+                self.logger.warning(
+                    f"BlockData integration is unavailable: {exc}. "
+                    "Detection will retry automatically while no save/paste is active; "
+                    "base blocks and states still work without retained metadata."
+                )
+            return
+        self._blockdata = integration
+        self._blockdata_error = ""
+        self._blockdata_last_logged_error = None
+        self.logger.info(
+            f"BlockData API v{integration.api_version} connected through "
+            f"adapter={integration.adapter_name}; block-entity and container data "
+            "will be retained in native NSCM saves."
+        )
+
     def _tick(self) -> None:
         if self._stopping:
             return
         self._tick_counter += 1
+        self._refresh_blockdata()
         for _ in range(self._completion_budget):
             try:
                 callback = self._completion_queue.get_nowait()
@@ -2950,6 +2976,12 @@ class NinjOSSchematicsPlugin(Plugin):
                 f"§7BlockData retention: §cUnavailable §8("
                 f"{blockdata_error})§r"
             )
+            if getattr(self, "_blockdata_enabled", False):
+                retry_note = (
+                    "after active saves/pastes finish" if self.save_jobs or self.paste_jobs
+                    else "automatically every 100 ticks"
+                )
+                lines.append(f"§7BlockData detection: §fretries {retry_note}")
         selection = self.selections.get(player.unique_id)
         if selection and selection.complete:
             sx, sy, sz = selection.size

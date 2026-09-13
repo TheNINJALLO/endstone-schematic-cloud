@@ -1,6 +1,6 @@
 """Ninj-OS Schematics plugin package."""
 
-__version__ = "1.7.2"
+__version__ = "1.7.3"
 
 try:
     from .plugin import NinjOSSchematicsPlugin

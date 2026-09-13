@@ -208,13 +208,26 @@ class BlockDataIntegration:
         api = import_module("endstone_blockdata")
         adapter = api.LiveBlockDataAdapter(server)
         if not adapter.available:
+            native_state = "native provider unavailable"
+            try:
+                native = server.plugin_manager.get_plugin("blockdata_api")
+                if native is None:
+                    native_state = "native plugin blockdata_api is not loaded"
+                elif getattr(native, "is_enabled", None) is False:
+                    native_state = "native plugin blockdata_api is disabled"
+                else:
+                    native_state = "native plugin blockdata_api has not registered its service"
+            except (AttributeError, RuntimeError, TypeError):
+                pass
             raise BlockDataIntegrationError(
-                "the endstone:blockdata:v2 service is not registered"
+                f"endstone:blockdata:v2 is not registered; {native_state}; "
+                f"Python API v{getattr(api, '__version__', 'unknown')} imported successfully"
             )
         capabilities = dict(adapter.capabilities())
         if not capabilities.get("block_entity_nbt"):
             raise BlockDataIntegrationError(
-                "the active BlockData adapter cannot capture block-entity NBT"
+                f"BlockData API v{getattr(api, '__version__', 'unknown')} is registered, "
+                f"but adapter={capabilities.get('adapter', 'unknown')} cannot capture block-entity NBT"
             )
         return cls(api, adapter, api.BlockDataService(adapter), capabilities)
 
