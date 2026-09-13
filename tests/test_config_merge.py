@@ -1,5 +1,34 @@
 from endstone_ninjos_schematics.config_merge import merge_missing
 
+import pytest
+
+
+@pytest.mark.parametrize("old_limit, adaptive, expected", [
+    (256, True, 1200), (128, True, 128), (1200, True, 1200), (256, False, 256),
+])
+def test_plugin_migrates_legacy_paste_limit_but_preserves_custom_settings(old_limit, adaptive, expected):
+    from types import SimpleNamespace
+    from test_chunk_loading import _load_plugin_module
+
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin.config = {
+        "performance": {"paste_changed_blocks_per_tick": old_limit, "paste_adaptive_pacing": adaptive},
+        "database": {"password": "preserved"},
+    }
+    saved = []
+    plugin.save_config = lambda: saved.append(True)
+
+    def unexpected_warning(message):
+        raise AssertionError(message)
+
+    plugin.logger = SimpleNamespace(info=lambda _message: None, warning=unexpected_warning)
+    plugin._merge_config_defaults()
+    assert plugin.config["performance"]["paste_changed_blocks_per_tick"] == expected
+    assert plugin.config["performance"]["paste_adaptive_pacing"] is adaptive
+    assert plugin.config["database"]["password"] == "preserved"
+    assert saved
+
 
 def test_merge_adds_new_sections_and_preserves_credentials():
     current = {"database": {"host": "db.example", "password": "secret"}}

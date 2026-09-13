@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.2 - 2026-09-13
+
+- Fixed paste starvation when chunk residency checks consume the whole 10 ms work budget before placement starts. A confirmed resident chunk now permits one record before yielding.
+- Avoided enumerating every loaded chunk twice per paste tick on API 0.11: positively verified, plugin-held paste chunks refresh every 10 ticks and at completion. Native checks, source scans, and unloaded chunks still use immediate checks.
+- Skipped stabilization waits for already resident chunks after a native hold is acquired and verified.
+- Replaced the fixed 256-change ceiling with adaptive pacing up to 1,200 changes: start at 256, increase on healthy server ticks, and back off on lag. Kept the shared record and time budgets.
+- Migrated the v1.7.1 default change limit automatically while preserving other custom limits and fixed limits when adaptive pacing is disabled.
+- Added throughput, work timings, chunk wait counts, and current/maximum change budgets to `/schem status`.
+- Passed 101 tests. In a controlled simulation with 20 ms chunk enumeration, v1.7.1 processed 0 of 4,096 records in 100 ticks; v1.7.2 completed all 4,096 in 18 ticks with three enumerations. This is a regression simulation, not a live BDS benchmark.
+
 ## 1.7.1 - 2026-09-13
 
 - Group streamed paste records into one contiguous range per destination chunk, eliminating repeated load/stabilization cycles across planning batches.

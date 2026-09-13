@@ -20,6 +20,92 @@ def test_palette_data_is_reused_across_batches():
     assert plugin.server.calls == [("minecraft:stone", {})]
 
 
+def test_slow_chunk_readiness_check_cannot_starve_paste(monkeypatch):
+    plugin = _plugin("skip")
+    job = stone_job()
+    scheduler(plugin, [job], Dimension(), monkeypatch)
+    clock = [0.0]
+    monkeypatch.setitem(plugin._process_paste_jobs.__func__.__globals__, "monotonic", lambda: clock[0])
+
+    def slow_check(*_args):
+        clock[0] += 0.02
+        return True
+
+    plugin._ensure_job_chunk = slow_check
+    plugin._process_paste_jobs()
+    assert job.cursor == job.placed == 1
+    assert job.last_chunk_check_ms == 20
+    assert job.phase == "placing"
+
+
+def test_legacy_paste_finishes_without_repeated_world_enumeration(monkeypatch):
+    from endstone_ninjos_schematics.codec import append_record
+    from endstone_ninjos_schematics.models import PasteChunkRange, PastePlan
+
+    plugin = _plugin("skip")
+    job = stone_job()
+    records = bytearray()
+    for index in range(4096):
+        append_record(records, index % 16, index // 256, (index // 16) % 16, 0)
+    job.plan = PastePlan((16, 16, 16), job.plan.palette, bytes(records), (PasteChunkRange(0, 0, 0, 4096),))
+    job.capture_history = True
+    job.ticket_chunk = (0, 0)
+    job.ticket_owned = True
+    job.ticket_backend = "tickingarea"
+    job.ready_since_tick = 0
+    clock = [0.0]
+    checks = []
+
+    class LegacyWorld(Dimension):
+        @property
+        def loaded_chunks(self):
+            checks.append(plugin._tick_counter)
+            clock[0] += 0.02
+            return [types.SimpleNamespace(x=0, z=0)]
+
+    dimension = LegacyWorld()
+    scheduler(plugin, [job], dimension, monkeypatch)
+    del plugin._ensure_job_chunk
+    del plugin._job_chunk_is_resident
+    plugin._paste_change_budget = 1200
+    plugin._auto_load_chunks = True
+    plugin._chunk_stabilize_ticks = 4
+    plugin._history_max_blocks_per_operation = 5000
+    plugin._release_job_chunk = lambda *_args, **_kwargs: None
+    plugin._complete_paste_job = lambda completed: plugin.paste_jobs.pop(completed.player_uuid)
+    monkeypatch.setitem(plugin._process_paste_jobs.__func__.__globals__, "monotonic", lambda: clock[0])
+    for tick in range(10, 20):
+        plugin._tick_counter = tick
+        clock[0] += 0.05
+        plugin._process_paste_jobs()
+        if not plugin.paste_jobs:
+            break
+    assert not plugin.paste_jobs
+    assert job.cursor == job.placed == job.captured_blocks == 4096
+    assert len(checks) == 2  # Admission and fresh completion verification.
+    assert len(dimension.blocks) == 4096
+
+
+def test_legacy_hold_cache_refreshes_and_never_caches_missing_chunks():
+    plugin = _plugin("skip")
+    job = stone_job()
+    plugin._tick_counter = 0
+    job.ticket_owned = True
+    job.ticket_chunk = (0, 0)
+    job.ticket_backend = "tickingarea"
+    dimension = types.SimpleNamespace(loaded_chunks=[types.SimpleNamespace(x=0, z=0)])
+    assert plugin._held_paste_chunk_state(job, dimension, 0, 0) is True
+    dimension.loaded_chunks = []
+    plugin._tick_counter = 10
+    assert plugin._held_paste_chunk_state(job, dimension, 0, 0) is False
+    assert job.ticket_verified_tick is None
+    dimension.loaded_chunks = [types.SimpleNamespace(x=0, z=0)]
+    assert plugin._held_paste_chunk_state(job, dimension, 0, 0) is True
+    job.ticket_owned = False
+    dimension.loaded_chunks = []
+    assert plugin._held_paste_chunk_state(job, dimension, 0, 0) is False
+
+
 def test_unchanged_air_skips_blockdata_capture_and_change_budget():
     plugin = _plugin("skip")
     job = stone_job()

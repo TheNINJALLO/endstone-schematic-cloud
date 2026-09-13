@@ -260,6 +260,12 @@ class PasteJob:
     before_records: Any = field(default_factory=bytearray)
     after_palette_lookup: dict[Any, int] = field(default_factory=dict)
     after_palette: list[dict[str, Any]] = field(default_factory=list)
+    started_time: float | None = None
+    last_chunk_check_ms: float = 0.0
+    last_batch_ms: float = 0.0
+    chunk_wait_ticks: int = 0
+    phase: str = "waiting for chunk"
+    ticket_verified_tick: int | None = None
     after_records: Any = field(default_factory=bytearray)
     before_block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)
     after_block_entities: dict[tuple[int, int, int], dict[str, Any]] = field(default_factory=dict)

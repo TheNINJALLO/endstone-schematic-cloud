@@ -223,7 +223,7 @@ def test_modern_runtime_registers_direct_ticket_even_when_chunk_is_loaded():
 
     dimension = Dimension()
     job = _job()
-    assert plugin._ensure_job_chunk(job, dimension, -2, 1) is False
+    assert plugin._ensure_job_chunk(job, dimension, -2, 1) is True
     assert dimension.loads == [(-2, 1)]
     plugin._tick_counter = 1
     assert plugin._ensure_job_chunk(job, dimension, -2, 1) is True

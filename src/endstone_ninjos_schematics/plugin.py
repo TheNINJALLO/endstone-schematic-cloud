@@ -62,6 +62,7 @@ from .models import (
     Selection,
 )
 from .planner import build_chunk_regions, prepare_paste_plan, prepare_streaming_paste_plan, validate_schematic_integrity
+from .paste_pacing import PastePacer
 from .record_store import RecordSource, SpillRecordBuffer, cleanup_orphan_record_files
 from .rotation import normalize_rotation, rotated_size
 from .sponge_schem import (
@@ -70,8 +71,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.7.1"
-BUILD_ID = "chunk-contiguous-paste-20260913"
+PLUGIN_VERSION = "1.7.2"
+BUILD_ID = "paste-progress-budget-20260913"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -131,6 +132,14 @@ class NinjOSSchematicsPlugin(Plugin):
             defaults = tomlkit.parse(packaged)
             changed = merge_missing(self.config, defaults)
             performance = self.config.get("performance", {})
+            # v1.7.1 introduced a fixed 256-change ceiling. Replace only that
+            # shipped value; adaptive pacing still starts at 256 and backs off on lag.
+            if (
+                int(performance.get("paste_changed_blocks_per_tick", 1200)) == 256
+                and bool(performance.get("paste_adaptive_pacing", True))
+            ):
+                performance["paste_changed_blocks_per_tick"] = 1200
+                changed = True
             # v1.0-v1.3 shipped 200 ticks as the default. That is too short for generated
             # or storage-bound chunks, so migrate only that exact legacy default while
             # preserving any administrator-chosen custom timeout.
@@ -196,7 +205,11 @@ class NinjOSSchematicsPlugin(Plugin):
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ninjos-schem")
         self._scan_budget = max(1, int(performance.get("scan_blocks_per_tick", 2500)))
         self._paste_budget = max(1, int(performance.get("paste_blocks_per_tick", 1200)))
-        self._paste_change_budget = max(1, int(performance.get("paste_changed_blocks_per_tick", 256)))
+        self._paste_change_budget = max(1, int(performance.get("paste_changed_blocks_per_tick", 1200)))
+        self._paste_pacer = (
+            PastePacer(min(self._paste_budget, self._paste_change_budget))
+            if bool(performance.get("paste_adaptive_pacing", True)) else None
+        )
         self._chunk_requests_per_tick = max(1, int(performance.get("chunk_loads_per_tick", 1)))
         self._chunk_request_tick = -1
         self._chunk_requests_used = 0
@@ -625,6 +638,9 @@ class NinjOSSchematicsPlugin(Plugin):
                 self.logger.error(f"Main-thread completion callback failed: {exc}")
                 self.logger.debug(traceback.format_exc())
 
+        pacer = getattr(self, "_paste_pacer", None)
+        if pacer is not None:
+            pacer.observe(monotonic(), bool(self.paste_jobs))
         self._process_save_jobs()
         self._process_paste_jobs()
         if self._tick_counter % self._preview_refresh == 0:
@@ -979,9 +995,14 @@ class NinjOSSchematicsPlugin(Plugin):
 
         self._submit_worker(encode_and_upload, success, failure)
 
+    def _current_paste_change_limit(self) -> int:
+        configured = getattr(self, "_paste_change_budget", 1200)
+        pacer = getattr(self, "_paste_pacer", None)
+        return min(configured, pacer.limit) if pacer is not None else configured
+
     def _process_paste_jobs(self) -> None:
         remaining = self._paste_budget
-        changes_remaining = getattr(self, "_paste_change_budget", 256)
+        changes_remaining = self._current_paste_change_limit()
         tick_deadline = monotonic() + getattr(self, "_paste_time_budget_seconds", 0.010)
         keys = list(self.paste_jobs.keys())
         next_player = getattr(self, "_paste_next_player", None)
@@ -995,6 +1016,8 @@ class NinjOSSchematicsPlugin(Plugin):
             job = self.paste_jobs.get(player_uuid)
             if job is None:
                 continue
+            if job.started_time is None:
+                job.started_time = monotonic()
             active_player = self.server.get_player(player_uuid)
             if active_player is not None and not self.has_schematic_access(active_player):
                 self._fail_paste_job(job, "schematic access was revoked")
@@ -1014,11 +1037,18 @@ class NinjOSSchematicsPlugin(Plugin):
             cursor_before = job.cursor
             writes_before = job.write_attempts
             try:
-                if not self._ensure_job_chunk(job, dimension, chunk.chunk_x, chunk.chunk_z):
-                    continue
+                check_started = monotonic()
+                ready = self._ensure_job_chunk(job, dimension, chunk.chunk_x, chunk.chunk_z)
                 now = monotonic()
-                if now >= tick_deadline:
-                    break
+                job.last_chunk_check_ms = (now - check_started) * 1000
+                if not ready:
+                    job.chunk_wait_ticks += 1
+                    job.phase = "stabilizing chunk" if job.ready_since_tick is not None else "waiting for chunk"
+                    continue
+                job.phase = "placing"
+                # Chunk enumeration on API 0.11 can itself exceed the paste
+                # deadline. Once residency is proven, allow one record before
+                # yielding; otherwise this check can starve the job forever.
                 jobs_left = max(1, len(keys) - index)
                 share = max(1, remaining // jobs_left)
                 count = min(share, job.chunk_remaining)
@@ -1034,6 +1064,7 @@ class NinjOSSchematicsPlugin(Plugin):
                     deadline=min(tick_deadline, job_deadline),
                     max_changes=max(1, changes_remaining // jobs_left),
                 )
+                job.last_batch_ms = (monotonic() - now) * 1000
             except Exception as exc:
                 self._fail_paste_job(job, str(exc))
                 continue
@@ -1042,7 +1073,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 remaining -= job.cursor - cursor_before
                 changes_remaining -= job.write_attempts - writes_before
             if processed and not self._job_chunk_is_resident(
-                dimension, chunk.chunk_x, chunk.chunk_z
+                dimension, chunk.chunk_x, chunk.chunk_z, job
             ):
                 self._fail_paste_job(
                     job,
@@ -1067,8 +1098,15 @@ class NinjOSSchematicsPlugin(Plugin):
                     player.send_message(
                         f"§dPasting {job.name}: {percent:.1f}% "
                         f"({job.cursor:,}/{job.plan.block_count:,}, "
-                        f"chunk {job.chunk_index + 1}/{len(job.plan.chunks)})"
+                        f"chunk {job.chunk_index + 1}/{len(job.plan.chunks)}, "
+                        f"{self._paste_rate(job):,.0f} records/sec)"
                     )
+
+    @staticmethod
+    def _paste_rate(job: PasteJob) -> float:
+        if job.started_time is None:
+            return 0.0
+        return job.cursor / max(0.001, monotonic() - job.started_time)
 
     def _create_type_only_block_data(self, block_type: str) -> Any:
         """Create block data without source states across Endstone 0.11 variants."""
@@ -1881,15 +1919,27 @@ class NinjOSSchematicsPlugin(Plugin):
             ):
                 self._release_job_chunk(job, dimension)
             if self._auto_load_chunks:
+                already_loaded = (
+                    callable(getattr(dimension, "load_chunk", None))
+                    and chunk_loaded_state(dimension, *requested) is True
+                )
                 if not self._request_job_chunk_ticket(job, dimension, *requested):
                     return False
+                # A native hold takes effect immediately on a resident chunk.
+                # Newly loaded chunks and asynchronous ticking areas still wait.
+                if (
+                    already_loaded and job.ticket_backend == "endstone"
+                    and chunk_loaded_state(dimension, *requested) is True
+                ):
+                    job.ready_since_tick = self._tick_counter - self._chunk_stabilize_ticks
+                    return True
                 # Bedrock chunk loads are asynchronous, even when a ticket is accepted.
                 return False
             job.ticket_chunk = requested
             job.ticket_backend = "observed"
             job.waiting_since_tick = self._tick_counter
 
-        state = chunk_loaded_state(dimension, *requested)
+        state = self._held_paste_chunk_state(job, dimension, *requested)
         if state is False:
             job.ready_since_tick = None
             if not self._auto_load_chunks:
@@ -1918,11 +1968,29 @@ class NinjOSSchematicsPlugin(Plugin):
             return False
         return True
 
-    @staticmethod
-    def _job_chunk_is_resident(dimension: Any, chunk_x: int, chunk_z: int) -> bool:
+    def _held_paste_chunk_state(self, job: Any, dimension: Any, chunk_x: int, chunk_z: int) -> bool | None:
+        # Legacy loaded_chunks enumerates the entire dimension. A positively
+        # verified, plugin-held paste chunk remains resident between checks.
+        # Refresh every 10 ticks and at chunk completion; never cache misses or
+        # unknowable state. Native O(1) checks and save scans remain immediate.
+        held_legacy = (
+            isinstance(job, PasteJob)
+            and job.ticket_owned
+            and job.ticket_chunk == (chunk_x, chunk_z)
+            and not callable(getattr(dimension, "is_chunk_loaded", None))
+        )
+        if held_legacy and not job.chunk_complete and job.ticket_verified_tick is not None:
+            if self._tick_counter - job.ticket_verified_tick < 10:
+                return True
+        state = chunk_loaded_state(dimension, chunk_x, chunk_z)
+        if held_legacy:
+            job.ticket_verified_tick = self._tick_counter if state is True else None
+        return state
+
+    def _job_chunk_is_resident(self, dimension: Any, chunk_x: int, chunk_z: int, job: Any = None) -> bool:
         """Return false only when the runtime positively reports that a chunk dropped."""
 
-        state = chunk_loaded_state(dimension, chunk_x, chunk_z)
+        state = self._held_paste_chunk_state(job, dimension, chunk_x, chunk_z)
         return state is not False
 
     def _release_job_chunk(
@@ -1971,6 +2039,8 @@ class NinjOSSchematicsPlugin(Plugin):
         job.ticket_chunk = None
         job.ticket_owned = False
         job.ticket_backend = None
+        if isinstance(job, PasteJob):
+            job.ticket_verified_tick = None
         if release_slot:
             job.ticket_name = None
             job.ticket_slot = None
@@ -2661,7 +2731,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 f"§aStarted chunk-aware paste of '{job.name}': {plan.block_count:,} blocks across "
                 f"{len(plan.chunks):,} chunk range(s), up to {self._paste_budget:,} blocks or "
                 f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
-                f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick "
+                f"at most {getattr(self, '_paste_change_budget', 1200):,} changed blocks per tick "
                 f"using a {plan_backing} plan.{history_note}"
             )
 
@@ -2727,7 +2797,7 @@ class NinjOSSchematicsPlugin(Plugin):
             f"§dStarted {operation} for '{entry.name}': {entry.block_count:,} changed blocks across "
             f"{len(plan.chunks):,} chunk(s), up to {self._paste_budget:,} blocks or "
             f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
-            f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick."
+            f"at most {getattr(self, '_paste_change_budget', 1200):,} changed blocks per tick."
         )
 
     def undo(self, player: Player) -> None:
@@ -2904,11 +2974,18 @@ class NinjOSSchematicsPlugin(Plugin):
             )
             chunk = paste.current_chunk
             if chunk is not None:
-                phase = "waiting for chunk" if paste.ready_since_tick is None else "placing / stabilizing chunk"
-                lines.append(f"§7Progress: §f{phase} {chunk.chunk_x}, {chunk.chunk_z}")
+                lines.append(f"§7Progress: §f{paste.phase} {chunk.chunk_x}, {chunk.chunk_z}")
+            lines.append(
+                f"§7Throughput: §f{self._paste_rate(paste):,.0f} records/sec "
+                f"({paste.cursor:,}/{paste.plan.block_count:,})"
+            )
+            lines.append(
+                f"§7Last work: §fchunk check {paste.last_chunk_check_ms:.1f} ms, "
+                f"placement {paste.last_batch_ms:.1f} ms; waited {paste.chunk_wait_ticks:,} ticks"
+            )
             lines.append(
                 f"§7Paste limits: §f{self._paste_budget:,} records, "
-                f"{getattr(self, '_paste_change_budget', 256):,} changes, "
+                f"{self._current_paste_change_limit():,}/{getattr(self, '_paste_change_budget', 1200):,} changes, "
                 f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick (shared)"
             )
         if not save and not preparing and not paste:

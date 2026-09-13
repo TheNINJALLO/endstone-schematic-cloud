@@ -1,71 +1,32 @@
-# Release Notes: v1.7.1
+# Release Notes: v1.7.2
 
-## Paste performance in new worlds
+## Slow and stalled pastes
 
-The streaming planner previously grouped each batch independently, revisiting destination chunks across batches. Each visit could require another ticket, load wait, stabilization delay, and release. v1.7.1 reserves one output range per destination chunk and writes bounded batches into it, so every chunk is pasted in one visit.
+On legacy Endstone builds, checking chunk residency enumerates the dimension's loaded chunks. When that check took longer than the 10 ms paste budget, v1.7.1 could yield before placing any blocks and repeat the same check forever. A confirmed resident chunk now permits one record before yielding. Positively verified, plugin-held paste chunks reuse their residency confirmation for up to 10 ticks, with a fresh check at completion. Missing/unknown chunks, native checks, and source scans do not use this cache.
 
-Native block data is cached per palette entry. Unchanged blocks, including air, skip optional BlockData undo capture. Existing block-state verification, metadata restoration, and partial undo protection remain active.
+Already resident chunks skip stabilization after a native hold is acquired and verified. Newly generated chunks and legacy ticking-area acquisition retain their loading and stabilization waits.
 
-Two settings are automatically added to existing configurations:
+## Adaptive throughput
 
 ```toml
 [performance]
-paste_changed_blocks_per_tick = 256
+paste_blocks_per_tick = 1200
+paste_changed_blocks_per_tick = 1200
+paste_adaptive_pacing = true
+paste_time_budget_ms = 10
 chunk_loads_per_tick = 1
 ```
 
-The change limit is shared across paste, undo, and redo jobs. It counts records that attempt a write, including failures; unchanged records do not consume it. An individual record can still retry a native write or restore metadata. The existing 1,200-record and 10 ms limits also apply. New chunk requests are staggered across save and paste jobs because generation continues after a ticket request returns.
+Pacing starts at 256 changes per tick and increases after healthy server ticks, up to the configured limits. Slow ticks above 75 ms halve the current budget, down to 64 or the configured maximum if lower. Catch-up callbacks do not trigger acceleration. The shared record and time limits continue to apply; a single native call cannot be interrupted.
 
-Stop the server, replace the old schematic wheel with `endstone_ninjos_schematics-1.7.1-py3-none-any.whl`, and restart fully. Keep the existing configuration, plugin data, database, and add-on packs. `/schem version` should report `chunk-contiguous-paste-20260913`.
+The shipped v1.7.1 value of 256 is automatically migrated to 1,200. Other administrator-selected limits are preserved. Setting `paste_adaptive_pacing = false` retains a fixed configured ceiling, including 256.
 
-Automated tests simulate delayed chunk generation and verify complete placement with undo capture. Live BDS performance and the reported player crashes still require validation on the affected server; these limits cannot interrupt a single slow native call or bound every metadata packet.
+`/schem status` now shows actual records/sec, processed/total records, last chunk-check and placement times, total chunk wait ticks, and current/maximum change limits. An unavailable BlockData service does not prevent ordinary block pastes.
 
-## BlockData-aware cloud schematics
+## Upgrade and validation
 
-v1.7.0 integrates the optional [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) service so native cloud saves and backups can retain supported block-entity data instead of only base block types and states.
+Stop the server, replace the old schematic wheel with `endstone_ninjos_schematics-1.7.2-py3-none-any.whl`, and restart fully. Keep existing configuration, plugin data, database, and add-on packs. `/schem version` should show build `paste-progress-budget-20260913`.
 
-- Save scans use bounded native region captures on Endstone's primary thread.
-- Canonical actor NBT and occupied container slots are stored per relative block coordinate.
-- Typed NBT byte, short, long, and float values survive the storage round trip.
-- Paste writes and verifies the base block first, then applies actor NBT and container inventory patches.
-- Empty destination slots are cleared explicitly so a paste cannot leave stale items behind.
-- Block-entity coordinates rotate with the placement.
-- Undo and redo retain the before/after metadata as well as block types and states.
-- `/schem status` reports the connected BlockData API version and adapter.
+All 101 automated tests pass. A controlled simulation with a 20 ms legacy chunk check reproduced 0 of 4,096 records placed over 100 ticks on v1.7.1. The updated scheduler completed all 4,096 records in 18 ticks with three chunk enumerations. This establishes the scheduler regression fix; it does not measure live BDS throughput or confirm resolution of client crashes.
 
-BlockData remains an optional runtime integration. The schematic plugin does not pin its Python package because its native plugin and CPython bridge must come from the same exact BlockData/BDS/Endstone release bundle.
-
-## NSCM v2 and compatibility
-
-NSCM v2 adds a dedicated compressed sparse block-entity section after the JSON header. Metadata is not deduplicated into the block palette, because two containers with identical block states can contain different names, items, or NBT.
-
-- v1.7.0 reads existing NSCM v1 MySQL rows and native backups.
-- New v1.7.0 saves use NSCM v2, even when the optional metadata section is empty.
-- The MySQL schema and Bedrock add-on do not change.
-- Every server sharing the cloud database should be upgraded before newly saved v2 entries are used.
-- Native `.nscm` exports retain the metadata section exactly. Sponge v3 conversion remains block-state-only for Bedrock actor data.
-
-With `blockdata.strict_restore = true`, a destination without the required API or write capability stops on the first retained-data failure and keeps partial undo history. `blockdata.max_uncompressed_mb = 64` bounds in-memory metadata separately from the spill-to-disk base-block record pipeline.
-
-## Large-paste safeguards retained
-
-The v1.6 watchdog and bounded-memory protections remain active:
-
-- Paste, undo, and redo obey both block-count and wall-clock budgets.
-- Native chunk holds use deferred release when supported.
-- Active operations continue when the initiating player disconnects.
-- Base block records, rotated plans, downloads, uploads, and undo journals remain streamed or spillable.
-- Packet-safe MySQL chunks and SHA-256 verification are unchanged.
-
-## Validation
-
-The v1.7.1 release passes 87 automated tests. Coverage includes contiguous streaming plans at all rotations, delayed chunk generation, complete placement and undo capture, palette reuse, shared limits, scheduler fairness, failed-write accounting, and spill-file cleanup alongside the existing metadata, database, chunk, and export suites.
-
-## Runtime compatibility
-
-- Endstone API 0.11
-- Python 3.10 or newer for the schematic plugin
-- Matching platform-specific BlockData native plugin and CPython bridge when metadata retention is enabled
-- Existing MySQL rows remain readable
-- No database migration
-- No Bedrock add-on change
+NSCM v1/v2, block-state verification, metadata restoration, and undo/redo compatibility are retained.

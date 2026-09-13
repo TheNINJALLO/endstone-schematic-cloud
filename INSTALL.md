@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.7.1 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.7.2 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.7.1-py3-none-any.whl
+endstone_ninjos_schematics-1.7.2-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,10 +23,10 @@ endstone_ninjos_schematics-1.7.1-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.7.1 build=chunk-contiguous-paste-20260913
+Enabled v1.7.2 build=paste-progress-budget-20260913
 ```
 
-The upgrade automatically adds `performance.paste_changed_blocks_per_tick = 256` and `performance.chunk_loads_per_tick = 1` to existing configurations. Keep the existing paste time budget for the first test in the affected world. `/schem status` shows the shared paste limits and current chunk phase. No database or add-on update is required when upgrading from v1.7.0.
+The upgrade adds `performance.paste_adaptive_pacing = true` and migrates the old v1.7.1 default change limit from 256 to 1,200. Adaptive pacing starts at 256, increases on healthy ticks, and backs off on lag. Other custom change limits are preserved; disabling adaptive pacing also preserves a fixed 256 limit. Keep the 10 ms paste time budget. `/schem status` now shows records/sec, chunk-check and placement times, wait ticks, and current/maximum change limits. No database or add-on update is required when upgrading from v1.7.0 or v1.7.1.
 
 ## Optional BlockData retention
 
@@ -49,7 +49,7 @@ max_uncompressed_mb = 64
 
 `strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
 
-Existing NSCM v1 rows remain readable. v1.7.1 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
+Existing NSCM v1 rows remain readable. v1.7.2 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 

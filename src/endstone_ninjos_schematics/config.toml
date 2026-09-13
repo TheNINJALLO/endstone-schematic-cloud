@@ -63,7 +63,10 @@ paste_blocks_per_tick = 1200
 # Shared paste/undo/redo limit on block records that attempt a world change.
 # Unchanged records do not consume this limit. Retries stay within one record.
 # This limits client update bursts even when native writes are very fast.
-paste_changed_blocks_per_tick = 256
+paste_changed_blocks_per_tick = 1200
+# Start at 256 changes/tick, increase during healthy ticks, and back off on lag.
+# The configured record, change and time limits always remain upper bounds.
+paste_adaptive_pacing = true
 # Shared save/paste limit on new chunk tickets; generation continues on later ticks.
 chunk_loads_per_tick = 1
 # Hard wall-clock guard for paste/undo/redo work on the main server thread. The

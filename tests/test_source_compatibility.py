@@ -15,5 +15,5 @@ def test_build_marker_is_present():
         / "endstone_ninjos_schematics"
         / "plugin.py"
     ).read_text(encoding="utf-8")
-    assert 'PLUGIN_VERSION = "1.7.1"' in plugin_source
-    assert 'BUILD_ID = "chunk-contiguous-paste-20260913"' in plugin_source
+    assert 'PLUGIN_VERSION = "1.7.2"' in plugin_source
+    assert 'BUILD_ID = "paste-progress-budget-20260913"' in plugin_source
