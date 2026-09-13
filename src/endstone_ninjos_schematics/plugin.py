@@ -70,8 +70,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.7.0"
-BUILD_ID = "blockdata-nscm-v2-20260904"
+PLUGIN_VERSION = "1.7.1"
+BUILD_ID = "chunk-contiguous-paste-20260913"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -196,6 +196,11 @@ class NinjOSSchematicsPlugin(Plugin):
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ninjos-schem")
         self._scan_budget = max(1, int(performance.get("scan_blocks_per_tick", 2500)))
         self._paste_budget = max(1, int(performance.get("paste_blocks_per_tick", 1200)))
+        self._paste_change_budget = max(1, int(performance.get("paste_changed_blocks_per_tick", 256)))
+        self._chunk_requests_per_tick = max(1, int(performance.get("chunk_loads_per_tick", 1)))
+        self._chunk_request_tick = -1
+        self._chunk_requests_used = 0
+        self._paste_next_player = None
         self._paste_time_budget_seconds = max(
             0.001,
             min(0.045, float(performance.get("paste_time_budget_ms", 10)) / 1000.0),
@@ -371,7 +376,9 @@ class NinjOSSchematicsPlugin(Plugin):
         self.logger.info(
             f"Enabled v{PLUGIN_VERSION} build={BUILD_ID}; scan budget={self._scan_budget}/tick, "
             f"paste budget={self._paste_budget}/tick or "
-            f"{self._paste_time_budget_seconds * 1000:g}ms/tick, workers={workers}, "
+            f"{self._paste_time_budget_seconds * 1000:g}ms/tick, "
+            f"changed blocks={self._paste_change_budget}/tick, chunk loads={self._chunk_requests_per_tick}/tick, "
+            f"workers={workers}, "
             f"tool debounce={debounce_ms}ms; access=operator-or-tag:{self._architect_tag}; "
             f"disk={self.disk_store.root if self.disk_store else 'disabled'}; "
             f"worldedit={self.worldedit_store.root if self.worldedit_store else 'disabled'}; "
@@ -974,11 +981,17 @@ class NinjOSSchematicsPlugin(Plugin):
 
     def _process_paste_jobs(self) -> None:
         remaining = self._paste_budget
+        changes_remaining = getattr(self, "_paste_change_budget", 256)
         tick_deadline = monotonic() + getattr(self, "_paste_time_budget_seconds", 0.010)
         keys = list(self.paste_jobs.keys())
+        next_player = getattr(self, "_paste_next_player", None)
+        if next_player in keys:
+            start = keys.index(next_player)
+            keys = keys[start:] + keys[:start]
         for index, player_uuid in enumerate(keys):
-            if remaining <= 0 or monotonic() >= tick_deadline:
+            if remaining <= 0 or changes_remaining <= 0 or monotonic() >= tick_deadline:
                 break
+            self._paste_next_player = keys[(index + 1) % len(keys)]
             job = self.paste_jobs.get(player_uuid)
             if job is None:
                 continue
@@ -998,6 +1011,8 @@ class NinjOSSchematicsPlugin(Plugin):
             if dimension is None:
                 self._fail_paste_job(job, f"dimension '{job.dimension_id}' is unavailable")
                 continue
+            cursor_before = job.cursor
+            writes_before = job.write_attempts
             try:
                 if not self._ensure_job_chunk(job, dimension, chunk.chunk_x, chunk.chunk_z):
                     continue
@@ -1017,11 +1032,15 @@ class NinjOSSchematicsPlugin(Plugin):
                     dimension,
                     count,
                     deadline=min(tick_deadline, job_deadline),
+                    max_changes=max(1, changes_remaining // jobs_left),
                 )
             except Exception as exc:
                 self._fail_paste_job(job, str(exc))
                 continue
-            remaining -= processed
+            finally:
+                # Failed jobs still spent this tick's record and client-update budgets.
+                remaining -= job.cursor - cursor_before
+                changes_remaining -= job.write_attempts - writes_before
             if processed and not self._job_chunk_is_resident(
                 dimension, chunk.chunk_x, chunk.chunk_z
             ):
@@ -1071,8 +1090,12 @@ class NinjOSSchematicsPlugin(Plugin):
         cached = job.palette_modes.get(palette_index)
         if cached == "missing":
             return cached, None
+        if palette_index in job.palette_data:
+            return cached or "exact", job.palette_data[palette_index]
         if cached == "type_only":
-            return cached, self._create_type_only_block_data(block_type)
+            data = self._create_type_only_block_data(block_type)
+            job.palette_data[palette_index] = data
+            return cached, data
         try:
             data = self.server.create_block_data(block_type, states)
         except Exception:
@@ -1082,8 +1105,10 @@ class NinjOSSchematicsPlugin(Plugin):
                 job.palette_modes[palette_index] = "missing"
                 return "missing", None
             job.palette_modes[palette_index] = "type_only"
+            job.palette_data[palette_index] = data
             return "type_only", data
         job.palette_modes[palette_index] = "exact"
+        job.palette_data[palette_index] = data
         return "exact", data
 
     def _record_missing_block(self, job: PasteJob, block_type: str) -> None:
@@ -1131,6 +1156,7 @@ class NinjOSSchematicsPlugin(Plugin):
         count: int,
         *,
         deadline: float | None = None,
+        max_changes: int | None = None,
     ) -> int:
         end = min(job.plan.block_count, job.cursor + count)
         processed = 0
@@ -1138,6 +1164,7 @@ class NinjOSSchematicsPlugin(Plugin):
         verify_writes = getattr(self, "_verify_paste_writes", True)
         integration = getattr(self, "_blockdata", None)
         strict_blockdata = getattr(self, "_blockdata_strict_restore", True)
+        writes_before = job.write_attempts
 
         for record_index in range(job.cursor, end):
             # Always allow one record to make forward progress, then yield as soon as
@@ -1145,6 +1172,8 @@ class NinjOSSchematicsPlugin(Plugin):
             # pre-empted, but it can no longer be followed by another 1,199 calls in the
             # same server tick.
             if processed and deadline is not None and monotonic() >= deadline:
+                break
+            if max_changes is not None and job.write_attempts - writes_before >= max_changes:
                 break
             dx, dy, dz, palette_index = record_at(job.plan.records, record_index)
             failure_reason = ""
@@ -1184,14 +1213,6 @@ class NinjOSSchematicsPlugin(Plugin):
                 current = target.data
                 current_type = self.block_data_identifier(current)
                 current_states = dict(current.block_states)
-                if integration is not None and (desired_entity is not None or job.capture_history):
-                    before_entity = integration.capture(job.dimension_id, world_position)
-                elif desired_entity is not None and strict_blockdata:
-                    detail = getattr(self, "_blockdata_error", "BlockData API is unavailable")
-                    raise BlockDataIntegrationError(
-                        f"retained block data cannot be restored because {detail}"
-                    )
-
                 mode, block_data = self._resolve_palette_entry(
                     job, palette_index, requested_type, requested_states
                 )
@@ -1232,6 +1253,20 @@ class NinjOSSchematicsPlugin(Plugin):
                 base_matches = current_type == desired_type and (
                     not require_exact_states or current_states == desired_states
                 )
+                # Most full-volume pastes contain large stretches of unchanged air.
+                # They need neither an undo snapshot nor a native BlockData capture.
+                if self._skip_unchanged and base_matches and desired_entity is None:
+                    job.skipped += 1
+                    job.cursor += 1
+                    processed += 1
+                    continue
+                if integration is not None and (desired_entity is not None or job.capture_history):
+                    before_entity = integration.capture(job.dimension_id, world_position)
+                elif desired_entity is not None and strict_blockdata:
+                    detail = getattr(self, "_blockdata_error", "BlockData API is unavailable")
+                    raise BlockDataIntegrationError(
+                        f"retained block data cannot be restored because {detail}"
+                    )
                 entity_matches = desired_entity is None or before_entity == desired_entity
                 if self._skip_unchanged and base_matches and entity_matches:
                     job.skipped += 1
@@ -1239,6 +1274,7 @@ class NinjOSSchematicsPlugin(Plugin):
                     processed += 1
                     continue
 
+                job.write_attempts += 1
                 try:
                     target.set_data(block_data, apply_physics=self._apply_physics)
                 except Exception:
@@ -1249,6 +1285,7 @@ class NinjOSSchematicsPlugin(Plugin):
                     if not missing_substitution:
                         state_fallback = True
                         job.palette_modes[palette_index] = "type_only"
+                        job.palette_data.pop(palette_index, None)
 
                 if state_fallback:
                     job.state_fallbacks += 1
@@ -1763,6 +1800,15 @@ class NinjOSSchematicsPlugin(Plugin):
         self, job: Any, dimension: Any, chunk_x: int, chunk_z: int
     ) -> bool:
         """Acquire a direct Endstone ticket or a temporary Bedrock ticking area."""
+
+        # Generation runs after the ticket request; its cost is not included in
+        # the paste loop's wall-clock budget. Stagger requests across all jobs.
+        if getattr(self, "_chunk_request_tick", -1) != self._tick_counter:
+            self._chunk_request_tick = self._tick_counter
+            self._chunk_requests_used = 0
+        if self._chunk_requests_used >= getattr(self, "_chunk_requests_per_tick", 1):
+            return False
+        self._chunk_requests_used += 1
 
         load_chunk = getattr(dimension, "load_chunk", None)
         if callable(load_chunk):
@@ -2614,7 +2660,8 @@ class NinjOSSchematicsPlugin(Plugin):
             current.send_message(
                 f"§aStarted chunk-aware paste of '{job.name}': {plan.block_count:,} blocks across "
                 f"{len(plan.chunks):,} chunk range(s), up to {self._paste_budget:,} blocks or "
-                f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick "
+                f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
+                f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick "
                 f"using a {plan_backing} plan.{history_note}"
             )
 
@@ -2679,7 +2726,8 @@ class NinjOSSchematicsPlugin(Plugin):
         player.send_message(
             f"§dStarted {operation} for '{entry.name}': {entry.block_count:,} changed blocks across "
             f"{len(plan.chunks):,} chunk(s), up to {self._paste_budget:,} blocks or "
-            f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick."
+            f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
+            f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick."
         )
 
     def undo(self, player: Player) -> None:
@@ -2853,6 +2901,15 @@ class NinjOSSchematicsPlugin(Plugin):
             lines.append(
                 f"§7{paste.operation.title()}: §f{paste.name} "
                 f"{paste.cursor * 100 / max(1, paste.plan.block_count):.1f}%"
+            )
+            chunk = paste.current_chunk
+            if chunk is not None:
+                phase = "waiting for chunk" if paste.ready_since_tick is None else "placing / stabilizing chunk"
+                lines.append(f"§7Progress: §f{phase} {chunk.chunk_x}, {chunk.chunk_z}")
+            lines.append(
+                f"§7Paste limits: §f{self._paste_budget:,} records, "
+                f"{getattr(self, '_paste_change_budget', 256):,} changes, "
+                f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick (shared)"
             )
         if not save and not preparing and not paste:
             lines.append("§7Active job: §fNone")

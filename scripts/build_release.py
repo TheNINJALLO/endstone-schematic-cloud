@@ -9,11 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 PROJECT = f"NinjOS-Schematic-Cloud-{VERSION}"
 
 CORE_ARTIFACTS = [
-    DIST / "endstone_ninjos_schematics-1.7.0-py3-none-any.whl",
+    DIST / f"endstone_ninjos_schematics-{VERSION}-py3-none-any.whl",
     DIST / "NinjOS_Schematic_Tools.mcaddon",
     DIST / "NinjOS_Schematics_BP.mcpack",
     DIST / "NinjOS_Schematics_RP.mcpack",

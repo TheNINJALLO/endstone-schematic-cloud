@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.1 - 2026-09-13
+
+- Group streamed paste records into one contiguous range per destination chunk, eliminating repeated load/stabilization cycles across planning batches.
+- Reserve spillable output ranges and scatter bounded batches into them, retaining source order within each chunk and the existing temporary-space limits.
+- Cache native palette data across paste ticks; skip unchanged blocks before optional BlockData undo capture.
+- Add a shared `paste_changed_blocks_per_tick = 256` limit for paste/undo/redo and `chunk_loads_per_tick = 1` for save/paste ticket requests. Existing configs receive both settings automatically.
+- Count failed writes against shared limits and rotate scheduling after a slow job to prevent starvation.
+- Add regression coverage for delayed new-world chunk generation, complete placement and undo capture, all rotations, failed writes, concurrent jobs, and temporary-file cleanup.
+
 ## 1.7.0 - 2026-09-04
 
 - Integrated the optional `endstone-blockdata` live service for canonical block-entity NBT and container inventory capture and restoration.

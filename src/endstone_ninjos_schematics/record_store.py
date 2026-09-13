@@ -272,6 +272,38 @@ class SpillRecordBuffer:
             self._memory.extend(piece)
         self._length += len(piece)
 
+    def reserve(self, byte_length: int) -> None:
+        """Allocate an empty output for bounded, out-of-order planner writes."""
+        self._ensure_open()
+        if self._length:
+            raise RecordStoreError("reserve requires an empty record buffer")
+        byte_length = int(byte_length)
+        if byte_length < 0 or byte_length % RECORD_SIZE:
+            raise RecordStoreError("reserved byte length is not record-aligned")
+        if byte_length > self._threshold:
+            self._spill()
+        if self._stream is not None:
+            self._stream.truncate(byte_length)
+            self._stream.seek(byte_length)
+        else:
+            self._memory = bytearray(byte_length)
+        self._length = byte_length
+
+    def write_at(self, offset: int, data: bytes | bytearray) -> None:
+        """Replace aligned bytes inside a previously reserved output."""
+        self._ensure_open()
+        offset = int(offset)
+        if offset < 0 or offset % RECORD_SIZE or len(data) % RECORD_SIZE:
+            raise RecordStoreError("record write is not aligned")
+        if offset + len(data) > self._length:
+            raise RecordStoreError("record write exceeds reserved output")
+        if self._stream is not None:
+            self._stream.seek(offset)
+            self._stream.write(data)
+            self._stream.seek(self._length)
+        else:
+            self._memory[offset : offset + len(data)] = data
+
     def truncate(self, byte_length: int) -> None:
         self._ensure_open()
         byte_length = max(0, int(byte_length))

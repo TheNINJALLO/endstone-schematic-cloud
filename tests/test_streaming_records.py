@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from endstone_ninjos_schematics.codec import (
     RECORD,
     append_record,
@@ -81,7 +83,8 @@ def test_streaming_codec_round_trip_uses_file_backed_records(tmp_path):
     decoded.records.close()
 
 
-def test_streaming_planner_matches_in_memory_record_set(tmp_path):
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_streaming_planner_matches_in_memory_record_set(tmp_path, rotation):
     raw = bytearray()
     for y in range(8):
         for z in range(24):
@@ -108,17 +111,55 @@ def test_streaming_planner_matches_in_memory_record_set(tmp_path):
         records=source_buffer.freeze(),
     )
     anchor = BlockPos(7, 20, -11)
-    expected = prepare_paste_plan(schematic_memory, anchor, 90)
+    expected = prepare_paste_plan(schematic_memory, anchor, rotation)
     actual = prepare_streaming_paste_plan(
         schematic_stream,
         anchor,
-        90,
+        rotation,
         factory(tmp_path, threshold=64),
         batch_records=1024,
     )
     assert actual.block_count == expected.block_count
     assert actual.size == expected.size
-    assert sorted(iter_records(actual.records)) == sorted(iter_records(expected.records))
+    assert list(iter_records(actual.records)) == list(iter_records(expected.records))
+    assert actual.chunks == expected.chunks
+    assert len({(chunk.chunk_x, chunk.chunk_z) for chunk in actual.chunks}) == len(actual.chunks)
     assert sum(chunk.block_count for chunk in actual.chunks) == actual.block_count
     schematic_stream.records.close()
     actual.records.close()
+
+
+@pytest.mark.parametrize("threshold", [16, 1024])
+def test_reserved_records_support_scatter_then_append(tmp_path, threshold):
+    from endstone_ninjos_schematics.record_store import RecordStoreError
+
+    buffer = SpillRecordBuffer(tmp_path, threshold_bytes=threshold)
+    buffer.reserve(3 * RECORD.size)
+    for index in (2, 0, 1):
+        buffer.write_at(index * RECORD.size, RECORD.pack(index, 0, 0, 0))
+    with pytest.raises(RecordStoreError):
+        buffer.write_at(3 * RECORD.size, RECORD.pack(99, 0, 0, 0))
+    with pytest.raises(RecordStoreError):
+        buffer.write_at(1, RECORD.pack(99, 0, 0, 0))
+    append_record(buffer, 3, 0, 0, 0)
+    source = buffer.freeze()
+    assert list(iter_records(source)) == [(index, 0, 0, 0) for index in range(4)]
+    source.close()
+
+
+def test_streaming_planner_cleans_reserved_file_after_scatter_failure(tmp_path):
+    class FailingBuffer(SpillRecordBuffer):
+        def write_at(self, offset, data):
+            raise OSError("disk write failed")
+
+    schematic = DecodedSchematic(
+        header={"size": [2, 1, 1], "block_count": 2},
+        palette=[{"type": "minecraft:stone", "states": {}}],
+        records=RECORD.pack(0, 0, 0, 0) + RECORD.pack(1, 0, 0, 0),
+    )
+    with pytest.raises(OSError, match="disk write failed"):
+        prepare_streaming_paste_plan(
+            schematic, BlockPos(0, 64, 0), 0,
+            lambda prefix: FailingBuffer(tmp_path, threshold_bytes=16, prefix=prefix),
+        )
+    assert list(tmp_path.iterdir()) == []

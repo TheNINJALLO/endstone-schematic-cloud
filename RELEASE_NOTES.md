@@ -1,4 +1,24 @@
-# Release Notes: v1.7.0
+# Release Notes: v1.7.1
+
+## Paste performance in new worlds
+
+The streaming planner previously grouped each batch independently, revisiting destination chunks across batches. Each visit could require another ticket, load wait, stabilization delay, and release. v1.7.1 reserves one output range per destination chunk and writes bounded batches into it, so every chunk is pasted in one visit.
+
+Native block data is cached per palette entry. Unchanged blocks, including air, skip optional BlockData undo capture. Existing block-state verification, metadata restoration, and partial undo protection remain active.
+
+Two settings are automatically added to existing configurations:
+
+```toml
+[performance]
+paste_changed_blocks_per_tick = 256
+chunk_loads_per_tick = 1
+```
+
+The change limit is shared across paste, undo, and redo jobs. It counts records that attempt a write, including failures; unchanged records do not consume it. An individual record can still retry a native write or restore metadata. The existing 1,200-record and 10 ms limits also apply. New chunk requests are staggered across save and paste jobs because generation continues after a ticket request returns.
+
+Stop the server, replace the old schematic wheel with `endstone_ninjos_schematics-1.7.1-py3-none-any.whl`, and restart fully. Keep the existing configuration, plugin data, database, and add-on packs. `/schem version` should report `chunk-contiguous-paste-20260913`.
+
+Automated tests simulate delayed chunk generation and verify complete placement with undo capture. Live BDS performance and the reported player crashes still require validation on the affected server; these limits cannot interrupt a single slow native call or bound every metadata packet.
 
 ## BlockData-aware cloud schematics
 
@@ -39,7 +59,7 @@ The v1.6 watchdog and bounded-memory protections remain active:
 
 ## Validation
 
-The v1.7.0 release passes 72 automated tests. New coverage exercises NSCM v1/v2 compatibility, bounded save capture and rollback, in-memory and streaming metadata round trips, typed NBT reconstruction, inventory clearing, rotation, metadata-aware paste history, and strict failure behavior alongside the existing large-paste, database, chunk, and export suites.
+The v1.7.1 release passes 87 automated tests. Coverage includes contiguous streaming plans at all rotations, delayed chunk generation, complete placement and undo capture, palette reuse, shared limits, scheduler fairness, failed-write accounting, and spill-file cleanup alongside the existing metadata, database, chunk, and export suites.
 
 ## Runtime compatibility
 

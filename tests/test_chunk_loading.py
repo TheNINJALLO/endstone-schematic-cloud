@@ -260,6 +260,26 @@ def test_modern_runtime_prefers_deferred_chunk_release():
     assert dimension.synchronous_unloads == []
 
 
+def test_new_chunk_requests_are_staggered_across_save_and_paste_jobs():
+    from test_paste_performance import stone_job
+
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._tick_counter = 10
+    plugin._chunk_requests_per_tick = 1
+    loads = []
+    dimension = types.SimpleNamespace(load_chunk=lambda x, z: loads.append((x, z)) or True)
+    save = _job()
+    paste = stone_job()
+    assert plugin._request_job_chunk_ticket(save, dimension, -2, 1)
+    assert not plugin._request_job_chunk_ticket(paste, dimension, 0, 0)
+    assert loads == [(-2, 1)]
+    assert paste.ticket_chunk is None
+    plugin._tick_counter += 1
+    assert plugin._request_job_chunk_ticket(paste, dimension, 0, 0)
+    assert loads == [(-2, 1), (0, 0)]
+
+
 def test_save_integrity_requires_verified_chunk_and_full_air_coverage():
     module = _load_plugin_module()
     plugin = object.__new__(module.NinjOSSchematicsPlugin)

@@ -96,18 +96,6 @@ def validate_schematic_integrity(schematic: DecodedSchematic) -> dict[str, int |
     }
 
 
-def _append_chunk_range(
-    ranges: list[PasteChunkRange], chunk_x: int, chunk_z: int, start: int, end: int
-) -> None:
-    if start == end:
-        return
-    if ranges and ranges[-1].chunk_x == chunk_x and ranges[-1].chunk_z == chunk_z and ranges[-1].end == start:
-        previous = ranges[-1]
-        ranges[-1] = PasteChunkRange(chunk_x, chunk_z, previous.start, end)
-    else:
-        ranges.append(PasteChunkRange(chunk_x, chunk_z, start, end))
-
-
 def prepare_paste_plan(
     schematic: DecodedSchematic,
     anchor: BlockPos,
@@ -165,11 +153,11 @@ def prepare_streaming_paste_plan(
     *,
     batch_records: int = 32768,
 ) -> PastePlan:
-    """Build a disk-spill paste plan using bounded record batches.
+    """Build one contiguous range per destination chunk using bounded batches.
 
-    Each batch is grouped by destination chunk, appended to one spillable output
-    stream, and then released. Chunks may appear in more than one range, but the
-    operation never holds the full source and destination plans in RAM together.
+    Count destinations first, reserve their output ranges, then scatter each
+    rotated batch into those ranges. Large outputs stay on disk. Input order
+    within each chunk is preserved, without reloading chunks between batches.
     """
 
     validate_schematic_integrity(schematic)
@@ -189,6 +177,25 @@ def prepare_streaming_paste_plan(
     anchor_chunk = (anchor.x // 16, anchor.z // 16)
 
     try:
+        counts: dict[tuple[int, int], int] = defaultdict(int)
+        for dx, dy, dz, _ in iter_records(schematic.records, chunk_records=batch_records):
+            rx, _, rz = rotate_coord(dx, dy, dz, schematic.size, rotation)
+            counts[((anchor.x + rx) // 16, (anchor.z + rz) // 16)] += 1
+        ordered = sorted(
+            counts,
+            key=lambda value: (
+                (value[0] - anchor_chunk[0]) ** 2 + (value[1] - anchor_chunk[1]) ** 2,
+                value[1],
+                value[0],
+            ),
+        )
+        offsets: dict[tuple[int, int], int] = {}
+        for chunk_x, chunk_z in ordered:
+            count = counts[(chunk_x, chunk_z)]
+            offsets[(chunk_x, chunk_z)] = cursor
+            ranges.append(PasteChunkRange(chunk_x, chunk_z, cursor, cursor + count))
+            cursor += count
+        output.reserve(cursor * RECORD.size)
         for batch_start in range(0, schematic.block_count, batch_records):
             count = min(batch_records, schematic.block_count - batch_start)
             buckets: dict[tuple[int, int], bytearray] = defaultdict(bytearray)
@@ -198,21 +205,13 @@ def prepare_streaming_paste_plan(
                 rx, ry, rz = rotate_coord(dx, dy, dz, schematic.size, rotation)
                 chunk = ((anchor.x + rx) // 16, (anchor.z + rz) // 16)
                 append_record(buckets[chunk], rx, ry, rz, palette_index)
-            ordered = sorted(
-                buckets,
-                key=lambda value: (
-                    (value[0] - anchor_chunk[0]) ** 2 + (value[1] - anchor_chunk[1]) ** 2,
-                    value[1],
-                    value[0],
-                ),
-            )
-            for chunk_x, chunk_z in ordered:
-                bucket = buckets[(chunk_x, chunk_z)]
+            for chunk, bucket in buckets.items():
                 block_count = len(bucket) // RECORD.size
-                output.extend(bucket)
-                _append_chunk_range(ranges, chunk_x, chunk_z, cursor, cursor + block_count)
-                cursor += block_count
-        if cursor != schematic.block_count:
+                output.write_at(offsets[chunk] * RECORD.size, bucket)
+                offsets[chunk] += block_count
+        if cursor != schematic.block_count or any(
+            offsets[(chunk.chunk_x, chunk.chunk_z)] != chunk.end for chunk in ranges
+        ):
             raise ValueError(
                 f"streaming paste planner produced {cursor:,} records from {schematic.block_count:,} inputs"
             )

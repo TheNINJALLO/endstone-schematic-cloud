@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.7.0 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.7.1 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.7.0-py3-none-any.whl
+endstone_ninjos_schematics-1.7.1-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,8 +23,10 @@ endstone_ninjos_schematics-1.7.0-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.7.0 build=blockdata-nscm-v2-20260904
+Enabled v1.7.1 build=chunk-contiguous-paste-20260913
 ```
+
+The upgrade automatically adds `performance.paste_changed_blocks_per_tick = 256` and `performance.chunk_loads_per_tick = 1` to existing configurations. Keep the existing paste time budget for the first test in the affected world. `/schem status` shows the shared paste limits and current chunk phase. No database or add-on update is required when upgrading from v1.7.0.
 
 ## Optional BlockData retention
 
@@ -47,7 +49,7 @@ max_uncompressed_mb = 64
 
 `strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
 
-Existing NSCM v1 rows remain readable. v1.7.0 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
+Existing NSCM v1 rows remain readable. v1.7.1 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 

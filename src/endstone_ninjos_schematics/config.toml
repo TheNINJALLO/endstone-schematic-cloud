@@ -60,6 +60,12 @@ denied_message = "Only server operators and players with the architect tag can u
 # World API calls stay on the main server thread and are spread over ticks.
 scan_blocks_per_tick = 2500
 paste_blocks_per_tick = 1200
+# Shared paste/undo/redo limit on block records that attempt a world change.
+# Unchanged records do not consume this limit. Retries stay within one record.
+# This limits client update bursts even when native writes are very fast.
+paste_changed_blocks_per_tick = 256
+# Shared save/paste limit on new chunk tickets; generation continues on later ticks.
+chunk_loads_per_tick = 1
 # Hard wall-clock guard for paste/undo/redo work on the main server thread. The
 # lower limit wins: a tick stops at this time or paste_blocks_per_tick.
 paste_time_budget_ms = 10
@@ -94,7 +100,8 @@ progress_message_interval_ticks = 40
 enabled = true
 # Record buffers stay in memory until this size, then spill into temp_directory.
 memory_spill_threshold_mb = 8
-# Paste planning groups only this many records at once before flushing to disk.
+# Paste planning groups this many records at once into globally reserved chunk
+# ranges. Each destination chunk is visited once, even across batch boundaries.
 plan_batch_records = 32768
 # Relative paths are stored below the plugin data folder. Use an absolute path to
 # place streaming work on a larger/faster volume.

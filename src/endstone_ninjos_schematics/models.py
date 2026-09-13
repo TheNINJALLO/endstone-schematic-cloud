@@ -271,6 +271,7 @@ class PasteJob:
     cursor: int = 0
     chunk_index: int = 0
     placed: int = 0
+    write_attempts: int = 0
     skipped: int = 0
     failed: int = 0
     state_fallbacks: int = 0
@@ -279,6 +280,7 @@ class PasteJob:
     block_entities_restored: int = 0
     block_entity_failures: int = 0
     palette_modes: dict[int, str] = field(default_factory=dict)
+    palette_data: dict[int, Any] = field(default_factory=dict)
     missing_type_counts: dict[str, int] = field(default_factory=dict)
     started_tick: int = 0
     last_progress_tick: int = 0

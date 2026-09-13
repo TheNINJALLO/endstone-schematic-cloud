@@ -15,5 +15,5 @@ def test_build_marker_is_present():
         / "endstone_ninjos_schematics"
         / "plugin.py"
     ).read_text(encoding="utf-8")
-    assert 'PLUGIN_VERSION = "1.7.0"' in plugin_source
-    assert 'BUILD_ID = "blockdata-nscm-v2-20260904"' in plugin_source
+    assert 'PLUGIN_VERSION = "1.7.1"' in plugin_source
+    assert 'BUILD_ID = "chunk-contiguous-paste-20260913"' in plugin_source

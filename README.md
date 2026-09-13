@@ -69,7 +69,7 @@ flowchart LR
 | Minecraft Bedrock / BDS | `26.x` |
 | Python | `3.10+` |
 | Database | MySQL `8.0+` or MariaDB `10.5+` |
-| Plugin release | `v1.7.0` |
+| Plugin release | `v1.7.1` |
 | Block metadata | Optional matching [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) release |
 
 ### 1. Download and install
@@ -77,7 +77,7 @@ flowchart LR
 Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
 
 ```bash
-gh release download v1.7.0 \
+gh release download v1.7.1 \
   --repo TheNINJALLO/endstone-schematic-cloud \
   --pattern "*.whl"
 ```
@@ -153,7 +153,7 @@ Restart Endstone and run:
 The startup log for this release contains:
 
 ```text
-Enabled v1.7.0 build=blockdata-nscm-v2-20260904
+Enabled v1.7.1 build=chunk-contiguous-paste-20260913
 ```
 
 If BlockData is installed, startup also reports its API version and active adapter. `/schem status` shows `BlockData retention: Ready`.
@@ -264,7 +264,7 @@ Typed NBT byte, short, long, and float values are preserved. Metadata coordinate
 The integration is optional for ordinary blocks. If it is unavailable, block types and states still save and paste normally. A schematic that actually contains retained metadata requires BlockData on the destination while strict restoration is enabled.
 
 > [!IMPORTANT]
-> NSCM v1 cloud rows and backups remain readable in v1.7.0. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
+> NSCM v1 cloud rows and backups remain readable in v1.7.1. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
 
 ### Use the optional in-game tools
 
@@ -406,12 +406,14 @@ Exact restoration requires the same behavior packs and block identifiers on sour
 
 ## Large schematic safety
 
-v1.7.0 retains the v1.6 watchdog protections: long-running pastes have both a record limit and a wall-clock limit.
+v1.7.1 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
 
 ```toml
 [performance]
 scan_blocks_per_tick = 2500
 paste_blocks_per_tick = 1200
+paste_changed_blocks_per_tick = 256
+chunk_loads_per_tick = 1
 paste_time_budget_ms = 10
 max_blocks_per_schematic = 2000000
 apply_physics = false
@@ -423,7 +425,9 @@ verify_paste_writes = true
 max_paste_failures = 0
 ```
 
-Paste work yields when either `paste_blocks_per_tick` or `paste_time_budget_ms` is reached. The time limit prevents state-heavy or slow chunks from monopolizing a server tick even when fewer than 1,200 records were processed.
+Paste work yields when any limit is reached. Limits are shared across active paste, undo, and redo jobs. `paste_changed_blocks_per_tick` counts records that attempt a world write, including failed placements; unchanged blocks use only the record/time budgets. An individual record may retry a write or restore metadata. The time limit yields between records and cannot interrupt a native call already running.
+
+`chunk_loads_per_tick` staggers new chunk tickets across save and paste jobs, reducing bursts of generation in unexplored worlds. Both new settings are merged into existing configs automatically. Native palette data is reused, and unchanged blocks skip optional BlockData history capture.
 
 Newer Endstone runtimes use native chunk loading and deferred release. Older API 0.11 runtimes fall back to temporary preloaded ticking areas:
 
@@ -514,7 +518,7 @@ Build the wheel:
 python -m build --wheel
 ```
 
-The current release passes 72 automated tests covering NSCM v1/v2 compatibility, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, bounded-memory planning, rotation, chunk residency, write verification, metadata-aware history, exports, disconnect-safe jobs, and watchdog-safe paste yielding.
+The current release passes 87 automated tests covering NSCM v1/v2 compatibility, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, contiguous bounded-memory planning, all rotations, delayed new-world chunk generation, shared paste limits, scheduler fairness, write verification, metadata-aware history, exports, disconnect-safe jobs, and paste yielding. Live BDS/client crash validation remains an on-server check.
 
 ## License
 
