@@ -59,11 +59,14 @@ denied_message = "Only server operators and players with the architect tag can u
 [performance]
 # World API calls stay on the main server thread and are spread over ticks.
 scan_blocks_per_tick = 2500
+# Shared wall-clock budget for all save scans; yields between block reads and
+# small metadata capture batches. One native call cannot be interrupted.
+scan_time_budget_ms = 5
 paste_blocks_per_tick = 1200
 # Shared paste/undo/redo limit on block records that attempt a world change.
 # Unchanged records do not consume this limit. Retries stay within one record.
 # This limits client update bursts even when native writes are very fast.
-paste_changed_blocks_per_tick = 1200
+paste_changed_blocks_per_tick = 256
 # Start at 256 changes/tick, increase during healthy ticks, and back off on lag.
 # The configured record, change and time limits always remain upper bounds.
 paste_adaptive_pacing = true

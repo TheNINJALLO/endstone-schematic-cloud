@@ -43,6 +43,7 @@ The plugin is designed for large builds:
 - Divides world reads and writes across server ticks.
 - Applies a real-time paste budget to protect the Bedrock main thread.
 - Holds and verifies each chunk before reading or writing it.
+- Organizes shared saves into categories, with destination selection and moves.
 - Supports undo and redo within configurable history limits.
 - Retains canonical block-entity NBT and container inventories through the optional BlockData API.
 - Continues active world operations if the initiating player disconnects.
@@ -69,7 +70,7 @@ flowchart LR
 | Minecraft Bedrock / BDS | `26.x` |
 | Python | `3.10+` |
 | Database | MySQL `8.0+` or MariaDB `10.5+` |
-| Plugin release | `v1.7.3` |
+| Plugin release | `v1.8.0` |
 | Block metadata | Optional matching [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) release |
 
 ### 1. Download and install
@@ -77,7 +78,7 @@ flowchart LR
 Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
 
 ```bash
-gh release download v1.7.3 \
+gh release download v1.8.0 \
   --repo TheNINJALLO/endstone-schematic-cloud \
   --pattern "*.whl"
 ```
@@ -153,7 +154,7 @@ Restart Endstone and run:
 The startup log for this release contains:
 
 ```text
-Enabled v1.7.3 build=blockdata-startup-retry-20260913
+Enabled v1.8.0 build=categories-chunk-safety-20260919
 ```
 
 If BlockData is installed, startup also reports its API version and active adapter. `/schem status` shows `BlockData retention: Ready`.
@@ -205,7 +206,7 @@ The form UI covers selection saving, cloud browsing, placement, undo/redo, diagn
    /schem save castle-gate true false
    ```
 
-   The optional arguments are `include_air` and `overwrite`.
+   The optional arguments are `include_air`, `overwrite`, and `category`.
 
    - `include_air = true` stores the complete selected volume. When pasted, saved air clears destination blocks.
    - `include_air = false` creates a sparse schematic and leaves unspecified destination blocks untouched.
@@ -214,6 +215,20 @@ The form UI covers selection saving, cloud browsing, placement, undo/redo, diagn
 4. Watch `/schem status` while the selection is scanned, compressed, uploaded, and verified.
 
 Schematic names normalize to lowercase and may contain letters, numbers, dots, underscores, and dashes. Names are limited to 64 characters.
+
+### Organize storage categories
+
+Open **Storage Categories** in `/schem menu` to create and browse categories. **Save Current Selection** asks for a destination before opening the save form. Open an existing library item and choose **Move to Category** to relocate it, including back to **Uncategorized**. Category and library lists have previous/next pages.
+
+```text
+/schem category create castles
+/schem save castle-gate true false castles
+/schem category browse castles
+/schem move castle-gate castles
+/schem move castle-gate uncategorized
+```
+
+Create the destination category before moving. Existing saves appear under Uncategorized after upgrading. Categories are shared within `database.namespace`; moves leave the saved block data intact. Schematic names remain unique across all categories in that namespace. Omitting the save category preserves an existing entry's category on overwrite; new entries default to Uncategorized. Use `uncategorized` explicitly to clear the category.
 
 ### Load, position, and paste a structure
 
@@ -268,7 +283,7 @@ Typed NBT byte, short, long, and float values are preserved. Metadata coordinate
 The integration is optional for ordinary blocks. If it is unavailable, block types and states still save and paste normally. A schematic that actually contains retained metadata requires BlockData on the destination while strict restoration is enabled.
 
 > [!IMPORTANT]
-> NSCM v1 cloud rows and backups remain readable in v1.7.3. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
+> NSCM v1 cloud rows and backups remain readable in v1.8.0. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
 
 ### Use the optional in-game tools
 
@@ -335,7 +350,9 @@ See [commands.md](commands.md) for the dedicated command reference, argument rul
 
 | Command | What it does |
 |---|---|
-| `/schem save <name> [include_air] [overwrite]` | Scans and uploads the current selection |
+| `/schem save <name> [include_air] [overwrite] [category]` | Scans and uploads to the selected category |
+| `/schem category [list\|create <name>\|browse <name>]` | Creates and browses shared categories |
+| `/schem move <name> <category\|uncategorized>` | Moves an existing save without rewriting its payload |
 | `/schem list [search]` | Browses or searches active cloud entries. Alias: `browse` |
 | `/schem load <name>` | Downloads, validates, and previews a cloud schematic |
 | `/schem export <name> [overwrite]` | Writes a native `.nscm` backup. Aliases: `download`, `disk-save` |
@@ -410,13 +427,14 @@ Exact restoration requires the same behavior packs and block identifiers on sour
 
 ## Large schematic safety
 
-v1.7.3 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
+v1.8.0 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
 
 ```toml
 [performance]
 scan_blocks_per_tick = 2500
+scan_time_budget_ms = 5
 paste_blocks_per_tick = 1200
-paste_changed_blocks_per_tick = 1200
+paste_changed_blocks_per_tick = 256
 paste_adaptive_pacing = true
 chunk_loads_per_tick = 1
 paste_time_budget_ms = 10
@@ -434,11 +452,13 @@ Paste work yields when any limit is reached. Limits are shared across active pas
 
 `chunk_loads_per_tick` staggers new chunk tickets across save and paste jobs, reducing bursts of generation in unexplored worlds. New settings are merged into existing configs automatically. Native palette data is reused, and unchanged blocks skip optional BlockData history capture.
 
-With adaptive pacing enabled, the change budget starts at 256 and increases toward 1,200 after healthy server ticks. It backs off when ticks exceed 75 ms. The old v1.7.1 default of 256 is migrated to the new maximum; other custom limits are preserved. Set `paste_adaptive_pacing = false` to use a fixed configured limit.
+Save scans share a 5 ms elapsed-time budget and rotate between builders. Optional BlockData capture uses small batches instead of one large native region call. The limits yield between operations; an individual native call cannot be interrupted.
 
-A verified resident chunk always permits one record before yielding, so a slow residency check cannot consume every tick without placement. On legacy APIs, positively verified, plugin-held paste chunks reuse that confirmation for up to 10 ticks and receive a fresh check at completion. Native checks and source scans remain immediate. `/schem status` reports actual records/sec, last chunk-check and placement times, wait ticks, and the current/maximum change budget.
+With adaptive pacing enabled, the change budget is capped at 256 by default and backs off when ticks exceed 75 ms. The old adaptive default of 1,200 is migrated to 256 to reduce client update bursts; other custom limits and fixed limits with adaptive pacing disabled are preserved. Server tick timing alone does not measure client/network capacity.
 
-Newer Endstone runtimes use native chunk loading and deferred release. Older API 0.11 runtimes fall back to temporary preloaded ticking areas:
+A verified resident chunk always permits one record before yielding, so a slow residency check cannot consume every tick without progress. On legacy APIs, positively verified, plugin-held source and destination chunks reuse that confirmation for up to 10 ticks and receive a fresh check at completion. Native checks remain immediate. Unknown residency never permits reads or writes. A source chunk that loses residency has its current region discarded and rescanned; a partially written destination chunk that loses residency stops the paste and retains available undo history. `/schem status` reports save destinations, scan limits, actual paste records/sec, work timings, and wait ticks.
+
+Newer Endstone runtimes prefer plugin chunk tickets, with shared ownership counted across jobs. Runtimes with only native chunk loading use counted holds and deferred release when available. Older API 0.11 runtimes fall back to temporary preloaded ticking areas:
 
 ```toml
 [performance]
@@ -528,7 +548,7 @@ Build the wheel:
 python -m build --wheel
 ```
 
-The current release passes 112 automated tests covering NSCM v1/v2 compatibility, BlockData startup recovery and diagnostics, typed BlockData NBT, bounded save capture, container restoration, strict metadata failures, codec integrity, database chunking, streaming records, contiguous bounded-memory planning, all rotations, delayed new-world chunk generation, shared paste limits, scheduler fairness, write verification, metadata-aware history, exports, disconnect-safe jobs, and paste yielding. Live BDS/client crash validation remains an on-server check.
+The suite covers categories and forms, NSCM v1/v2 compatibility, BlockData, codecs, streaming, rotations, delayed chunk loading, complete scans, shared holds, pacing, undo, and exports. `tests/test_categories_database.py` also supports real MariaDB/MySQL testing: set `SCHEM_TEST_DB_PORT` to an isolated loopback database named `schem_test` with a root account and empty password. These opt-in tests create unique tables and remove only those tables afterward. Live BDS/client timeout validation remains an on-server check.
 
 ## License
 

@@ -55,7 +55,7 @@ Alias: `/schem clearsel`
 
 ## Cloud library
 
-### `/schem save <name> [include_air] [overwrite]`
+### `/schem save <name> [include_air] [overwrite] [category]`
 
 Scans the selected cuboid across ticks, verifies every source chunk, compresses it, and uploads it to MySQL/MariaDB.
 
@@ -68,11 +68,12 @@ Scans the selected cuboid across ticks, verifies every source chunk, compresses 
 - `include_air=true` saves the complete volume; saved air clears destination blocks.
 - `include_air=false` stores only non-air blocks; unspecified destination blocks remain untouched.
 - `overwrite=true` replaces an existing entry with the same normalized name.
+- `category` selects an existing shared category. Omit it to retain the category on overwrite or use Uncategorized for a new save. Use `uncategorized` explicitly to remove an assignment.
 - When BlockData retention is ready, supported block-entity NBT and container inventories are included automatically.
 
 ### `/schem list [search]`
 
-Lists up to 50 active cloud entries, optionally filtered by a search phrase.
+Browses active cloud entries in pages of 50, optionally filtered by a search phrase. Use the previous/next buttons to reach every matching save.
 
 ```text
 /schem list
@@ -80,6 +81,25 @@ Lists up to 50 active cloud entries, optionally filtered by a search phrase.
 ```
 
 Alias: `/schem browse`
+
+### `/schem category [list|create <name>|browse <name>]`
+
+Creates or browses storage categories in the shared namespace. Names follow the schematic naming rules. `uncategorized` is reserved for entries without a category. The menu supports category creation, destination selection for new saves, and moving existing saves.
+
+```text
+/schem category create castles
+/schem save castle-gate true false castles
+/schem category browse castles
+```
+
+### `/schem move <name> <category|uncategorized>`
+
+Moves an existing save to an existing category without changing its payload or name. Names remain unique across categories in the namespace.
+
+```text
+/schem move castle-gate castles
+/schem move castle-gate uncategorized
+```
 
 ### `/schem load <name>`
 

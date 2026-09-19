@@ -42,6 +42,7 @@ class SchematicForms:
         form.add_button("Save Current Selection", on_click=self.open_save)
         form.add_button("Clear Selection", on_click=self.plugin.clear_selection)
         form.add_button("Browse Cloud Library", on_click=lambda p: self.plugin.request_list(p, ""))
+        form.add_button("Storage Categories", on_click=self.plugin.request_categories)
         form.add_button("Search Cloud Library", on_click=self.open_search)
         form.add_button("Current Placement", on_click=self.open_placement)
         form.add_button(
@@ -59,6 +60,72 @@ class SchematicForms:
         player.send_form(form)
 
     def open_save(self, player: "Player") -> None:
+        if not self._allowed(player):
+            return
+        self.plugin.request_categories(player, purpose="save")
+
+    def show_categories(
+        self, player: "Player", rows: list[dict[str, Any]], purpose: str = "browse",
+        name: str = "", page: int = 0,
+    ) -> None:
+        if not self._allowed(player):
+            return
+        title = "Storage Categories" if purpose == "browse" else "Choose Storage Category"
+        form = ActionForm(title=title, content=f"Page {page + 1}. Select a category.")
+        if purpose == "browse":
+            form.add_button("All Schematics", on_click=lambda p: self.plugin.request_list(p))
+        elif purpose == "save":
+            form.add_button(
+                "Keep Current Category\nNew saves: Uncategorized",
+                on_click=lambda p: self.open_save_in_category(p, None),
+            )
+        form.add_button(
+            "Uncategorized", on_click=lambda p: self.select_category(p, "", purpose, name)
+        )
+        for row in rows[:50]:
+            category = str(row["name"])
+            form.add_button(
+                category,
+                on_click=lambda p, c=category: self.select_category(p, c, purpose, name),
+            )
+        if page:
+            form.add_button("Previous Page", on_click=lambda p: self.plugin.request_categories(p, purpose, name, page - 1))
+        if len(rows) > 50:
+            form.add_button("Next Page", on_click=lambda p: self.plugin.request_categories(p, purpose, name, page + 1))
+        form.add_button("Create Category", on_click=lambda p: self.open_create_category(p, purpose, name))
+        form.add_button("Main Menu", on_click=self.open_main)
+        player.send_form(form)
+
+    def select_category(self, player: "Player", category: str, purpose: str, name: str) -> None:
+        if not self._allowed(player):
+            return
+        if purpose == "save":
+            self.open_save_in_category(player, category)
+        elif purpose == "move":
+            self.plugin.request_move(player, name, category)
+        else:
+            self.plugin.request_list(player, category=category)
+
+    def open_create_category(self, player: "Player", purpose: str = "browse", name: str = "") -> None:
+        if not self._allowed(player):
+            return
+
+        def submitted(submitter: "Player", response: str) -> None:
+            try:
+                values = json.loads(response)
+                category = str(values[0])
+            except (ValueError, TypeError, IndexError):
+                submitter.send_error_message("The category form returned invalid data.")
+                return
+            self.plugin.request_create_category(submitter, category, purpose, name)
+
+        player.send_form(ModalForm(
+            title="Create Storage Category",
+            controls=[TextInput("Category name (letters, numbers, dots, underscores, dashes)", "castles")],
+            submit_button="Create Category", on_submit=submitted,
+        ))
+
+    def open_save_in_category(self, player: "Player", category: str | None) -> None:
         if not self._allowed(player):
             return
         selection = self.plugin.selections.get(player.unique_id)
@@ -86,11 +153,11 @@ class SchematicForms:
             except (ValueError, TypeError, IndexError, json.JSONDecodeError):
                 submitter.send_error_message("The save form returned invalid data.")
                 return
-            self.plugin.start_save(submitter, name, description, include_air, overwrite)
+            self.plugin.start_save(submitter, name, description, include_air, overwrite, category)
 
         player.send_form(
             ModalForm(
-                title=f"Save {sx} × {sy} × {sz} Selection",
+                title=f"Save to {category or ('Current Category' if category is None else 'Uncategorized')}",
                 controls=controls,
                 submit_button="Scan and Upload",
                 on_submit=submitted,
@@ -118,15 +185,15 @@ class SchematicForms:
             )
         )
 
-    def show_library(self, player: "Player", rows: list[dict[str, Any]], search: str = "") -> None:
+    def show_library(
+        self, player: "Player", rows: list[dict[str, Any]], search: str = "",
+        category: str | None = None, page: int = 0,
+    ) -> None:
         if not self._allowed(player):
             return
-        if not rows:
-            player.send_message("§eNo cloud schematics matched that search.")
-            return
         form = ActionForm(
-            title="Cloud Schematic Library",
-            content=f"{len(rows)} blueprint(s){f' matching {search}' if search else ''}. Select one to preview.",
+            title=category or ("All Schematics" if category is None else "Uncategorized"),
+            content=f"Page {page + 1}: {min(50, len(rows))} blueprint(s){f' matching {search}' if search else ''}.",
         )
         for row in rows[:50]:
             name = str(row["name"])
@@ -136,7 +203,12 @@ class SchematicForms:
                 f"{row.get('display_name') or name}\n§7{name} | {size} | {author}",
                 on_click=lambda p, selected=dict(row): self.open_library_item(p, selected),
             )
-        form.add_button("Search Again", on_click=self.open_search)
+        if page:
+            form.add_button("Previous Page", on_click=lambda p: self.plugin.request_list(p, search, category, page - 1))
+        if len(rows) > 50:
+            form.add_button("Next Page", on_click=lambda p: self.plugin.request_list(p, search, category, page + 1))
+        form.add_button("Storage Categories", on_click=self.plugin.request_categories)
+        form.add_button("Search All Schematics", on_click=self.open_search)
         player.send_form(form)
 
     def open_library_item(self, player: "Player", row: dict[str, Any]) -> None:
@@ -145,6 +217,7 @@ class SchematicForms:
         name = str(row["name"])
         content = (
             f"Cloud name: {name}\n"
+            f"Category: {row.get('category') or 'Uncategorized'}\n"
             f"Size: {row['size_x']} × {row['size_y']} × {row['size_z']}\n"
             f"Stored blocks: {int(row['block_count']):,}\n"
             f"Author: {row.get('author_name', 'Unknown')}\n"
@@ -153,6 +226,9 @@ class SchematicForms:
         )
         form = ActionForm(title=str(row.get("display_name") or name), content=content)
         form.add_button("Load and Preview", on_click=lambda p: self.plugin.request_load(p, name))
+        form.add_button(
+            "Move to Category", on_click=lambda p: self.plugin.request_categories(p, "move", name)
+        )
         disk_ready = (
             self.plugin.disk_store is not None
             and self.plugin.disk_store.settings.enabled

@@ -2,6 +2,8 @@ import importlib
 import sys
 import types
 
+import pytest
+
 from endstone_ninjos_schematics.chunk_loading import (
     chunk_block_bounds,
     chunk_loaded_state,
@@ -99,6 +101,77 @@ def test_tickingarea_command_is_dimension_scoped_and_preloaded():
     command = tickingarea_add_command("Nether", -2, 1, name, preload=True)
     assert command.startswith("execute in nether run tickingarea add -32 0 16 -17 0 31 ")
     assert command.endswith(f"{name} true")
+
+
+def test_enumerated_chunk_must_also_report_loaded_when_available():
+    dimension = types.SimpleNamespace(loaded_chunks=[types.SimpleNamespace(x=0, z=0, is_loaded=False)])
+    assert chunk_loaded_state(dimension, 0, 0) is False
+
+
+def test_unknown_loaded_state_cannot_authorize_reads_or_verify_writes():
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._auto_load_chunks = True
+    plugin._chunk_load_timeout = 20
+    plugin._chunk_stabilize_ticks = 0
+    plugin._tick_counter = 0
+    world = types.SimpleNamespace(load_chunk=lambda *_args: True)
+    job = _job()
+    assert not plugin._ensure_job_chunk(job, world, -2, 1)
+    for tick in range(1, 21):
+        plugin._tick_counter = tick
+        assert not plugin._ensure_job_chunk(job, world, -2, 1)
+        assert not plugin._job_chunk_is_resident(world, -2, 1, job)
+    plugin._tick_counter = 21
+    with pytest.raises(RuntimeError, match="verified residency"):
+        plugin._ensure_job_chunk(job, world, -2, 1)
+
+
+@pytest.mark.parametrize("plugin_tickets", [True, False])
+def test_shared_native_chunk_is_released_only_after_last_job(plugin_tickets):
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._auto_load_chunks = True
+    plugin._chunk_stabilize_ticks = 0
+    plugin._tick_counter = 0
+    plugin._legacy_ticket_slots = {}
+    plugin.logger = types.SimpleNamespace(debug=lambda *_args: None)
+    loads, releases = [], []
+    world = types.SimpleNamespace(
+        load_chunk=lambda x, z: loads.append((x, z)) or True,
+        unload_chunk_request=lambda x, z: releases.append((x, z)),
+        is_chunk_loaded=lambda *_args: True,
+    )
+    if plugin_tickets:
+        world.add_plugin_chunk_ticket = lambda x, z, owner: loads.append((x, z, owner)) or True
+        world.remove_plugin_chunk_ticket = lambda x, z, owner: releases.append((x, z, owner))
+    first, second = _job(), _job()
+    assert plugin._ensure_job_chunk(first, world, -2, 1)
+    assert plugin._ensure_job_chunk(second, world, -2, 1)
+    assert len(loads) == 1
+    plugin._release_job_chunk(first, world, release_slot=True)
+    assert not releases
+    assert second.ticket_owned
+    plugin._release_job_chunk(second, world, release_slot=True)
+    assert len(releases) == 1
+    assert not plugin._native_chunk_holds
+
+
+def test_paste_cannot_resume_after_losing_a_partially_written_chunk():
+    from test_paste_performance import stone_job
+
+    module = _load_plugin_module()
+    plugin = object.__new__(module.NinjOSSchematicsPlugin)
+    plugin._auto_load_chunks = True
+    plugin._tick_counter = 5
+    job = stone_job()
+    job.ticket_owned = True
+    job.ticket_chunk = (0, 0)
+    job.cursor = 1
+    world = types.SimpleNamespace(is_chunk_loaded=lambda *_args: False)
+    with pytest.raises(RuntimeError, match="lost verified residency"):
+        plugin._ensure_job_chunk(job, world, 0, 0)
+    assert job.cursor == 1
 
 
 def test_legacy_runtime_holds_even_already_loaded_chunk_before_scanning():

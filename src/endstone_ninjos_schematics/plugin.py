@@ -46,6 +46,7 @@ from .config_merge import merge_missing
 from .database import (
     DatabaseSettings,
     MySQLSchematicStore,
+    normalize_category_name,
     normalize_schematic_name,
 )
 from .disk_store import DiskSchematicStore, DiskSettings
@@ -71,8 +72,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.7.3"
-BUILD_ID = "blockdata-startup-retry-20260913"
+PLUGIN_VERSION = "1.8.0"
+BUILD_ID = "categories-chunk-safety-20260919"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -133,13 +134,13 @@ class NinjOSSchematicsPlugin(Plugin):
             defaults = tomlkit.parse(packaged)
             changed = merge_missing(self.config, defaults)
             performance = self.config.get("performance", {})
-            # v1.7.1 introduced a fixed 256-change ceiling. Replace only that
-            # shipped value; adaptive pacing still starts at 256 and backs off on lag.
+            # The old adaptive ceiling can still overload connected clients even
+            # when server ticks look healthy. Migrate that shipped ceiling only.
             if (
-                int(performance.get("paste_changed_blocks_per_tick", 1200)) == 256
+                int(performance.get("paste_changed_blocks_per_tick", 256)) == 1200
                 and bool(performance.get("paste_adaptive_pacing", True))
             ):
-                performance["paste_changed_blocks_per_tick"] = 1200
+                performance["paste_changed_blocks_per_tick"] = 256
                 changed = True
             # v1.0-v1.3 shipped 200 ticks as the default. That is too short for generated
             # or storage-bound chunks, so migrate only that exact legacy default while
@@ -205,8 +206,13 @@ class NinjOSSchematicsPlugin(Plugin):
         workers = max(1, min(8, int(performance.get("worker_threads", 2))))
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ninjos-schem")
         self._scan_budget = max(1, int(performance.get("scan_blocks_per_tick", 2500)))
+        self._scan_time_budget_seconds = max(
+            0.001, min(0.020, float(performance.get("scan_time_budget_ms", 5)) / 1000.0)
+        )
+        self._scan_next_player = None
+        self._native_chunk_holds: dict[tuple[str, int, int], int] = {}
         self._paste_budget = max(1, int(performance.get("paste_blocks_per_tick", 1200)))
-        self._paste_change_budget = max(1, int(performance.get("paste_changed_blocks_per_tick", 1200)))
+        self._paste_change_budget = max(1, int(performance.get("paste_changed_blocks_per_tick", 256)))
         self._paste_pacer = (
             PastePacer(min(self._paste_budget, self._paste_change_budget))
             if bool(performance.get("paste_adaptive_pacing", True)) else None
@@ -743,10 +749,16 @@ class NinjOSSchematicsPlugin(Plugin):
 
     def _process_save_jobs(self) -> None:
         remaining = self._scan_budget
+        tick_deadline = monotonic() + getattr(self, "_scan_time_budget_seconds", 0.005)
         keys = list(self.save_jobs.keys())
+        next_player = getattr(self, "_scan_next_player", None)
+        if next_player in keys:
+            start = keys.index(next_player)
+            keys = keys[start:] + keys[:start]
         for index, player_uuid in enumerate(keys):
-            if remaining <= 0:
+            if remaining <= 0 or monotonic() >= tick_deadline:
                 break
+            self._scan_next_player = keys[(index + 1) % len(keys)]
             job = self.save_jobs.get(player_uuid)
             if job is None:
                 continue
@@ -775,14 +787,16 @@ class NinjOSSchematicsPlugin(Plugin):
                 jobs_left = max(1, len(keys) - index)
                 share = max(1, remaining // jobs_left)
                 count = min(share, job.region_remaining)
-                processed = self._scan_save_batch(job, dimension, count)
+                now = monotonic()
+                deadline = min(tick_deadline, now + max(0.001, (tick_deadline - now) / jobs_left))
+                processed = self._scan_save_batch(job, dimension, count, deadline=deadline)
             except Exception as exc:
                 self._fail_save_job(job, str(exc))
                 continue
             remaining -= processed
 
             if processed and not self._job_chunk_is_resident(
-                dimension, region.chunk_x, region.chunk_z
+                dimension, region.chunk_x, region.chunk_z, job
             ):
                 self._rollback_save_region(job)
                 self._release_job_chunk(job, dimension)
@@ -829,26 +843,24 @@ class NinjOSSchematicsPlugin(Plugin):
                         f"{job.verified_regions + 1}/{len(job.regions)})"
                     )
 
-    def _scan_save_batch(self, job: SaveJob, dimension: Any, count: int) -> int:
-        # BlockData's native region call is bounded to 32,768 blocks. Coordinates
-        # come from one chunk-contained region, so a 32,000-record slice plus its
-        # partial first/last layers always stays below that native ceiling.
+    def _scan_save_batch(
+        self, job: SaveJob, dimension: Any, count: int, *, deadline: float | None = None
+    ) -> int:
+        # Capture at most 64 records' bounding box per native call. This keeps
+        # metadata capture bounded even when an administrator raises the scan cap.
         integration = getattr(self, "_blockdata", None)
-        if integration is not None:
-            count = min(count, 32_000)
-        coordinates = list(job.coordinates(count))
         captured_entities: dict[tuple[int, int, int], dict[str, Any]] = {}
-        if integration is not None and coordinates:
-            xs = [entry[0] for entry in coordinates]
-            ys = [entry[1] for entry in coordinates]
-            zs = [entry[2] for entry in coordinates]
-            captured_entities = integration.capture_region(
-                job.dimension_id,
-                (min(xs), min(ys), min(zs)),
-                (max(xs), max(ys), max(zs)),
-            )
         processed = 0
-        for x, y, z, dx, dy, dz in coordinates:
+        for x, y, z, dx, dy, dz in job.coordinates(count):
+            if processed and deadline is not None and monotonic() >= deadline:
+                break
+            if integration is not None and processed % 64 == 0:
+                coordinates = list(job.coordinates(min(64, count - processed)))
+                captured_entities = integration.capture_region(
+                    job.dimension_id,
+                    tuple(min(entry[axis] for entry in coordinates) for axis in range(3)),
+                    tuple(max(entry[axis] for entry in coordinates) for axis in range(3)),
+                )
             block = dimension.get_block_at(x, y, z)
             data = block.data
             block_type = self.block_data_identifier(data)
@@ -962,6 +974,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 row = {
                     "namespace": self.store.settings.namespace,
                     "name": job.name,
+                    "category": job.category,
                     "display_name": job.display_name,
                     "description": job.description,
                     "author_uuid": str(job.player_uuid),
@@ -1022,7 +1035,7 @@ class NinjOSSchematicsPlugin(Plugin):
         self._submit_worker(encode_and_upload, success, failure)
 
     def _current_paste_change_limit(self) -> int:
-        configured = getattr(self, "_paste_change_budget", 1200)
+        configured = getattr(self, "_paste_change_budget", 256)
         pacer = getattr(self, "_paste_pacer", None)
         return min(configured, pacer.limit) if pacer is not None else configured
 
@@ -1865,6 +1878,23 @@ class NinjOSSchematicsPlugin(Plugin):
     ) -> bool:
         """Acquire a direct Endstone ticket or a temporary Bedrock ticking area."""
 
+        hold_key = (job.dimension_id, chunk_x, chunk_z)
+        holds = getattr(self, "_native_chunk_holds", None)
+        if holds is None:
+            holds = self._native_chunk_holds = {}
+        plugin_ticket = callable(getattr(dimension, "add_plugin_chunk_ticket", None)) and callable(
+            getattr(dimension, "remove_plugin_chunk_ticket", None)
+        )
+        native = plugin_ticket or callable(getattr(dimension, "load_chunk", None))
+        if native and holds.get(hold_key, 0):
+            holds[hold_key] += 1
+            job.ticket_chunk = (chunk_x, chunk_z)
+            job.ticket_owned = True
+            job.ticket_backend = "plugin_ticket" if plugin_ticket else "endstone"
+            job.waiting_since_tick = self._tick_counter
+            job.ready_since_tick = None
+            return True
+
         # Generation runs after the ticket request; its cost is not included in
         # the paste loop's wall-clock budget. Stagger requests across all jobs.
         if getattr(self, "_chunk_request_tick", -1) != self._tick_counter:
@@ -1874,13 +1904,16 @@ class NinjOSSchematicsPlugin(Plugin):
             return False
         self._chunk_requests_used += 1
 
-        load_chunk = getattr(dimension, "load_chunk", None)
-        if callable(load_chunk):
-            if not bool(load_chunk(chunk_x, chunk_z)):
+        if native:
+            if plugin_ticket:
+                # False means this plugin already owns the ticket, not a failed load.
+                dimension.add_plugin_chunk_ticket(chunk_x, chunk_z, self)
+            elif not bool(dimension.load_chunk(chunk_x, chunk_z)):
                 raise RuntimeError(f"Endstone refused a load ticket for chunk {chunk_x}, {chunk_z}")
+            holds[hold_key] = 1
             job.ticket_chunk = (chunk_x, chunk_z)
             job.ticket_owned = True
-            job.ticket_backend = "endstone"
+            job.ticket_backend = "plugin_ticket" if plugin_ticket else "endstone"
             job.waiting_since_tick = self._tick_counter
             job.ready_since_tick = None
             return True
@@ -1946,7 +1979,8 @@ class NinjOSSchematicsPlugin(Plugin):
                 self._release_job_chunk(job, dimension)
             if self._auto_load_chunks:
                 already_loaded = (
-                    callable(getattr(dimension, "load_chunk", None))
+                    (callable(getattr(dimension, "load_chunk", None))
+                     or callable(getattr(dimension, "add_plugin_chunk_ticket", None)))
                     and chunk_loaded_state(dimension, *requested) is True
                 )
                 if not self._request_job_chunk_ticket(job, dimension, *requested):
@@ -1954,7 +1988,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 # A native hold takes effect immediately on a resident chunk.
                 # Newly loaded chunks and asynchronous ticking areas still wait.
                 if (
-                    already_loaded and job.ticket_backend == "endstone"
+                    already_loaded and job.ticket_backend in {"endstone", "plugin_ticket"}
                     and chunk_loaded_state(dimension, *requested) is True
                 ):
                     job.ready_since_tick = self._tick_counter - self._chunk_stabilize_ticks
@@ -1966,27 +2000,31 @@ class NinjOSSchematicsPlugin(Plugin):
             job.waiting_since_tick = self._tick_counter
 
         state = self._held_paste_chunk_state(job, dimension, *requested)
-        if state is False:
+        if state is not True:
             job.ready_since_tick = None
+            if isinstance(job, SaveJob) and job.region_snapshot_active:
+                self._rollback_save_region(job)
+                job.chunk_retries += 1
+                if job.chunk_retries > self._max_chunk_retries:
+                    raise RuntimeError(f"chunk {chunk_x}, {chunk_z} repeatedly lost residency during saving")
+            if isinstance(job, PasteJob) and job.current_chunk and job.cursor > job.current_chunk.start:
+                raise RuntimeError(
+                    f"chunk {chunk_x}, {chunk_z} lost verified residency during {job.operation}; "
+                    "stopped with partial undo instead of continuing an unverified build"
+                )
             if not self._auto_load_chunks:
                 raise RuntimeError(
-                    f"chunk {chunk_x}, {chunk_z} is not loaded; move near it or enable "
+                    f"chunk {chunk_x}, {chunk_z} is not verified loaded; move near it or enable "
                     "auto_load_missing_chunks"
                 )
             if job.waiting_since_tick is None:
                 job.waiting_since_tick = self._tick_counter
             if self._tick_counter - job.waiting_since_tick > self._chunk_load_timeout:
-                raise RuntimeError(f"timed out waiting for chunk {chunk_x}, {chunk_z} to load")
+                raise RuntimeError(
+                    f"timed out waiting for chunk {chunk_x}, {chunk_z} to load with verified residency"
+                )
             return False
-
-        if state is None and not self._auto_load_chunks:
-            raise RuntimeError(
-                f"this Endstone build cannot prove chunk {chunk_x}, {chunk_z} is loaded; "
-                "enable auto_load_missing_chunks so the plugin can hold it"
-            )
-
-        # If the old runtime cannot expose loaded state, a held preloaded ticking area is
-        # accepted only after the same stabilization delay used for positively observed loads.
+        job.waiting_since_tick = self._tick_counter
         if job.ready_since_tick is None:
             job.ready_since_tick = self._tick_counter
             return self._chunk_stabilize_ticks <= 0
@@ -1996,16 +2034,17 @@ class NinjOSSchematicsPlugin(Plugin):
 
     def _held_paste_chunk_state(self, job: Any, dimension: Any, chunk_x: int, chunk_z: int) -> bool | None:
         # Legacy loaded_chunks enumerates the entire dimension. A positively
-        # verified, plugin-held paste chunk remains resident between checks.
+        # verified, plugin-held chunk remains resident between checks.
         # Refresh every 10 ticks and at chunk completion; never cache misses or
-        # unknowable state. Native O(1) checks and save scans remain immediate.
+        # unknowable state. Native O(1) checks remain immediate.
         held_legacy = (
-            isinstance(job, PasteJob)
+            isinstance(job, (SaveJob, PasteJob))
             and job.ticket_owned
             and job.ticket_chunk == (chunk_x, chunk_z)
             and not callable(getattr(dimension, "is_chunk_loaded", None))
         )
-        if held_legacy and not job.chunk_complete and job.ticket_verified_tick is not None:
+        complete = job.region_complete if isinstance(job, SaveJob) else getattr(job, "chunk_complete", False)
+        if held_legacy and not complete and job.ticket_verified_tick is not None:
             if self._tick_counter - job.ticket_verified_tick < 10:
                 return True
         state = chunk_loaded_state(dimension, chunk_x, chunk_z)
@@ -2014,10 +2053,10 @@ class NinjOSSchematicsPlugin(Plugin):
         return state
 
     def _job_chunk_is_resident(self, dimension: Any, chunk_x: int, chunk_z: int, job: Any = None) -> bool:
-        """Return false only when the runtime positively reports that a chunk dropped."""
+        """Require positive proof; unknown state must never validate saved air or writes."""
 
         state = self._held_paste_chunk_state(job, dimension, chunk_x, chunk_z)
-        return state is not False
+        return state is True
 
     def _release_job_chunk(
         self,
@@ -2029,11 +2068,25 @@ class NinjOSSchematicsPlugin(Plugin):
         ticket = getattr(job, "ticket_chunk", None)
         backend = getattr(job, "ticket_backend", None)
         owned = bool(getattr(job, "ticket_owned", False))
+        if owned and ticket and backend in {"endstone", "plugin_ticket"}:
+            holds = getattr(self, "_native_chunk_holds", {})
+            hold_key = (job.dimension_id, ticket[0], ticket[1])
+            count = holds.get(hold_key, 1)
+            if count > 1:
+                holds[hold_key] = count - 1
+                owned = False  # Another job still needs this physical hold.
+            else:
+                holds.pop(hold_key, None)
         legacy_remove_succeeded = True
         if owned and ticket:
             if dimension is None:
                 dimension = self._get_dimension(job.dimension_id)
-            if backend == "endstone" and dimension is not None:
+            if backend == "plugin_ticket" and dimension is not None:
+                try:
+                    dimension.remove_plugin_chunk_ticket(ticket[0], ticket[1], self)
+                except Exception as exc:
+                    self.logger.debug(f"Unable to release plugin chunk ticket {ticket}: {exc}")
+            elif backend == "endstone" and dimension is not None:
                 # unload_chunk() forces pending unloads and chunk saves to complete
                 # synchronously. Endstone documents that calling it once per chunk over
                 # a large area is expensive, so prefer the deferred release API.
@@ -2065,7 +2118,7 @@ class NinjOSSchematicsPlugin(Plugin):
         job.ticket_chunk = None
         job.ticket_owned = False
         job.ticket_backend = None
-        if isinstance(job, PasteJob):
+        if isinstance(job, (SaveJob, PasteJob)):
             job.ticket_verified_tick = None
         if release_slot:
             job.ticket_name = None
@@ -2115,6 +2168,7 @@ class NinjOSSchematicsPlugin(Plugin):
         description: str = "",
         include_air: bool | None = None,
         overwrite: bool | None = None,
+        category: str | None = None,
     ) -> None:
         if not self.require_schematic_access(player):
             return
@@ -2133,6 +2187,8 @@ class NinjOSSchematicsPlugin(Plugin):
             return
         try:
             normalized = normalize_schematic_name(name)
+            if category is not None:
+                category = normalize_category_name(category)
         except ValueError as exc:
             player.send_error_message(str(exc))
             return
@@ -2170,6 +2226,7 @@ class NinjOSSchematicsPlugin(Plugin):
             size=selection.size,
             total_volume=selection.volume,
             regions=build_chunk_regions(low, selection.size),
+            category=category,
             records=(self._new_record_buffer("records-save-") if self._streaming_enabled else bytearray()),
             started_tick=self._tick_counter,
             last_progress_tick=self._tick_counter,
@@ -2184,22 +2241,25 @@ class NinjOSSchematicsPlugin(Plugin):
     # Cloud listing, loading, deletion, and diagnostics
     # ------------------------------------------------------------------
 
-    def request_list(self, player: Player, search: str = "") -> None:
+    def request_list(
+        self, player: Player, search: str = "", category: str | None = None, page: int = 0
+    ) -> None:
         if not self.require_schematic_access(player):
             return
         if not self._require_database(player):
             return
         player_uuid = player.unique_id
         search = search.strip()[:128]
+        page = max(0, int(page))
 
         def operation() -> list[dict[str, Any]]:
             assert self.store is not None
-            return self.store.list(search=search, limit=50)
+            return self.store.list(search=search, limit=51, offset=page * 50, category=category)
 
         def success(rows: list[dict[str, Any]]) -> None:
             current = self.server.get_player(player_uuid)
             if current and self.require_schematic_access(current):
-                self.forms.show_library(current, rows, search)
+                self.forms.show_library(current, rows, search, category, page)
 
         def failure(error: BaseException) -> None:
             current = self.server.get_player(player_uuid)
@@ -2208,6 +2268,50 @@ class NinjOSSchematicsPlugin(Plugin):
 
         self._submit_worker(operation, success, failure)
         player.send_message("§7Querying the shared schematic library...")
+
+    def _category_request(self, player: Player, operation: Callable, success: Callable) -> None:
+        if not self.require_schematic_access(player) or not self._require_database(player):
+            return
+        player_uuid = player.unique_id
+
+        def completed(result: Any) -> None:
+            current = self.server.get_player(player_uuid)
+            if current and self.require_schematic_access(current):
+                success(current, result)
+
+        def failed(error: BaseException) -> None:
+            current = self.server.get_player(player_uuid)
+            if current:
+                current.send_error_message(f"Category operation failed: {error}")
+
+        self._submit_worker(operation, completed, failed)
+
+    def request_categories(
+        self, player: Player, purpose: str = "browse", name: str = "", page: int = 0
+    ) -> None:
+        page = max(0, int(page))
+        self._category_request(
+            player,
+            lambda: self.store.list_categories(limit=51, offset=page * 50),
+            lambda p, rows: self.forms.show_categories(p, rows, purpose, name, page),
+        )
+
+    def request_create_category(
+        self, player: Player, category: str, purpose: str = "browse", name: str = ""
+    ) -> None:
+        def success(current: Player, created: str) -> None:
+            current.send_message(f"§aCategory '{created}' is ready.")
+            self.forms.select_category(current, created, purpose, name)
+
+        self._category_request(player, lambda: self.store.create_category(category), success)
+
+    def request_move(self, player: Player, name: str, category: str) -> None:
+        def success(current: Player, _result: Any) -> None:
+            destination = normalize_category_name(category)
+            current.send_message(f"§aMoved '{name}' to {destination or 'Uncategorized'}.")
+            self.request_list(current, category=destination)
+
+        self._category_request(player, lambda: self.store.move(name, category), success)
 
     def request_load(self, player: Player, name: str) -> None:
         if not self.require_schematic_access(player):
@@ -2757,7 +2861,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 f"§aStarted chunk-aware paste of '{job.name}': {plan.block_count:,} blocks across "
                 f"{len(plan.chunks):,} chunk range(s), up to {self._paste_budget:,} blocks or "
                 f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
-                f"at most {getattr(self, '_paste_change_budget', 1200):,} changed blocks per tick "
+                f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick "
                 f"using a {plan_backing} plan.{history_note}"
             )
 
@@ -2823,7 +2927,7 @@ class NinjOSSchematicsPlugin(Plugin):
             f"§dStarted {operation} for '{entry.name}': {entry.block_count:,} changed blocks across "
             f"{len(plan.chunks):,} chunk(s), up to {self._paste_budget:,} blocks or "
             f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick, "
-            f"at most {getattr(self, '_paste_change_budget', 1200):,} changed blocks per tick."
+            f"at most {getattr(self, '_paste_change_budget', 256):,} changed blocks per tick."
         )
 
     def undo(self, player: Player) -> None:
@@ -2997,6 +3101,16 @@ class NinjOSSchematicsPlugin(Plugin):
         preparing = self.preparing_pastes.get(player.unique_id)
         if save:
             lines.append(f"§7Save scan: §f{save.name} {save.cursor * 100 / save.total_volume:.1f}%")
+            lines.append(f"§7Save category: §f{save.category or ('keep current' if save.category is None else 'Uncategorized')}")
+            lines.append(
+                f"§7Scan limits: §f{self._scan_budget:,} records, "
+                f"{getattr(self, '_scan_time_budget_seconds', 0.005) * 1000:g} ms per tick (shared)"
+            )
+            region = save.current_region
+            if region:
+                phase = "scanning" if save.region_snapshot_active else "waiting for chunk"
+                lines.append(f"§7Scan progress: §f{phase} {region.chunk_x}, {region.chunk_z}; "
+                             f"{save.verified_regions}/{len(save.regions)} regions verified")
         if preparing:
             lines.append(f"§7Paste preparation: §f{preparing[1].name}")
         if paste:
@@ -3017,7 +3131,7 @@ class NinjOSSchematicsPlugin(Plugin):
             )
             lines.append(
                 f"§7Paste limits: §f{self._paste_budget:,} records, "
-                f"{self._current_paste_change_limit():,}/{getattr(self, '_paste_change_budget', 1200):,} changes, "
+                f"{self._current_paste_change_limit():,}/{getattr(self, '_paste_change_budget', 256):,} changes, "
                 f"{getattr(self, '_paste_time_budget_seconds', 0.010) * 1000:g} ms per tick (shared)"
             )
         if not save and not preparing and not paste:
@@ -3086,7 +3200,22 @@ class NinjOSSchematicsPlugin(Plugin):
                 else:
                     include_air = self._parse_bool(rest[1]) if len(rest) >= 2 else None
                     overwrite = self._parse_bool(rest[2]) if len(rest) >= 3 else None
-                    self.start_save(player, rest[0], "", include_air, overwrite)
+                    category = rest[3] if len(rest) >= 4 else None
+                    self.start_save(player, rest[0], "", include_air, overwrite, category)
+            elif subcommand in {"category", "categories"}:
+                if not rest or rest[0].lower() == "list":
+                    self.request_categories(player)
+                elif len(rest) == 2 and rest[0].lower() == "create":
+                    self.request_create_category(player, rest[1])
+                elif len(rest) == 2 and rest[0].lower() == "browse":
+                    self.request_list(player, category=normalize_category_name(rest[1]))
+                else:
+                    player.send_error_message("Usage: /schem category [list|create <name>|browse <name>]")
+            elif subcommand == "move":
+                if len(rest) != 2:
+                    player.send_error_message("Usage: /schem move <schematic> <category|uncategorized>")
+                else:
+                    self.request_move(player, rest[0], rest[1])
             elif subcommand in {"list", "browse"}:
                 self.request_list(player, " ".join(rest))
             elif subcommand == "load":
@@ -3196,7 +3325,9 @@ class NinjOSSchematicsPlugin(Plugin):
             "§f/schem pos1 [x y z]§7 - set corner one\n"
             "§f/schem pos2 [x y z]§7 - set corner two\n"
             "§f/schem clearselection§7 - clear the active selection outline\n"
-            "§f/schem save <name> [include_air] [overwrite]§7 - scan and upload\n"
+            "§f/schem save <name> [include_air] [overwrite] [category]§7 - scan and upload\n"
+            "§f/schem category [list|create <name>|browse <name>]§7 - organize storage\n"
+            "§f/schem move <name> <category|uncategorized>§7 - move a saved blueprint\n"
             "§f/schem list [search]§7 - browse shared blueprints\n"
             "§f/schem load <name>§7 - download and preview\n"
             "§f/schem export <name> [overwrite]§7 - save the native cloud payload to disk\n"

@@ -55,6 +55,14 @@ class SchematicNotFound(DatabaseError):
     """The requested schematic does not exist."""
 
 
+def normalize_category_name(name: str) -> str:
+    """Use the same safe names as schematics; empty/uncategorized means root."""
+    if not name.strip():
+        return ""
+    normalized = normalize_schematic_name(name)
+    return "" if normalized == "uncategorized" else normalized
+
+
 @dataclass(frozen=True, slots=True)
 class DatabaseSettings:
     host: str
@@ -190,6 +198,8 @@ class MySQLSchematicStore:
         self.settings = settings
         self.table = f"{settings.table_prefix}schematics"
         self.chunk_table = f"{settings.table_prefix}schematic_payload_chunks"
+        self.category_table = f"{settings.table_prefix}schematic_categories"
+        self.membership_table = f"{settings.table_prefix}schematic_categories_members"
 
     @contextmanager
     def _connection(self, *, autocommit: bool = True) -> Iterator[Any]:
@@ -310,6 +320,87 @@ class MySQLSchematicStore:
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
                 cursor.execute(chunk_ddl)
+                # Additive migration: existing payloads and rows remain untouched.
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS `{self.category_table}` (
+                        `namespace` VARCHAR(64) NOT NULL,
+                        `name` VARCHAR(64) NOT NULL,
+                        PRIMARY KEY (`namespace`, `name`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """)
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS `{self.membership_table}` (
+                        `schematic_id` BIGINT UNSIGNED NOT NULL,
+                        `category` VARCHAR(64) NOT NULL,
+                        PRIMARY KEY (`schematic_id`),
+                        KEY `idx_category` (`category`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """)
+
+    def create_category(self, name: str) -> str:
+        category = normalize_category_name(name)
+        if not category:
+            raise ValueError("Uncategorized already exists. Choose a category name.")
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"INSERT INTO `{self.category_table}` (`namespace`, `name`) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE `name`=VALUES(`name`)",
+                    (self.settings.namespace, category),
+                )
+        return category
+
+    def list_categories(self, limit: int = 51, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT `name` FROM `{self.category_table}` WHERE `namespace`=%s "
+                    "ORDER BY `name` LIMIT %s OFFSET %s",
+                    (self.settings.namespace, max(1, min(100, limit)), max(0, offset)),
+                )
+                return list(cursor.fetchall())
+
+    def _set_category(self, cursor: Any, schematic_id: int, category: str | None) -> None:
+        # Omitted destinations preserve the category on overwrite, including old clients.
+        if category is None:
+            return
+        category = normalize_category_name(category)
+        if category:
+            cursor.execute(
+                f"SELECT `name` FROM `{self.category_table}` WHERE `namespace`=%s AND `name`=%s",
+                (self.settings.namespace, category),
+            )
+            if not cursor.fetchone():
+                raise DatabaseError(f"Category '{category}' does not exist. Create it first.")
+            cursor.execute(
+                f"INSERT INTO `{self.membership_table}` (`schematic_id`, `category`) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE `category`=VALUES(`category`)",
+                (schematic_id, category),
+            )
+        else:
+            cursor.execute(
+                f"DELETE FROM `{self.membership_table}` WHERE `schematic_id`=%s", (schematic_id,)
+            )
+
+    def move(self, name: str, category: str) -> None:
+        normalized = normalize_schematic_name(name)
+        category = normalize_category_name(category)
+        with self._connection(autocommit=False) as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"SELECT `id` FROM `{self.table}` WHERE `namespace`=%s AND `name`=%s "
+                        "AND `deleted_at` IS NULL FOR UPDATE",
+                        (self.settings.namespace, normalized),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        raise SchematicNotFound(f"schematic '{name}' was not found")
+                    self._set_category(cursor, int(row["id"]), category)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     @staticmethod
     def _row_columns() -> tuple[str, ...]:
@@ -398,6 +489,7 @@ class MySQLSchematicStore:
                             raise DatabaseError("database payload chunk count did not verify after upload")
                         if int(verification.get("bytes", -1)) != len(payload):
                             raise DatabaseError("database payload byte count did not verify after upload")
+                    self._set_category(cursor, schematic_id, row.get("category"))
                 connection.commit()
         except Exception:
             if connection is not None:
@@ -492,6 +584,7 @@ class MySQLSchematicStore:
                             raise DatabaseError("database payload chunk count did not verify after upload")
                         if int(verification.get("bytes", -1)) != payload_bytes:
                             raise DatabaseError("database payload byte count did not verify after upload")
+                    self._set_category(cursor, schematic_id, row.get("category"))
                 connection.commit()
         except Exception:
             if connection is not None:
@@ -701,7 +794,9 @@ class MySQLSchematicStore:
                 row["payload_chunk_count"] = chunk_count
                 return row
 
-    def list(self, search: str = "", limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list(
+        self, search: str = "", limit: int = 50, offset: int = 0, category: str | None = None
+    ) -> list[dict[str, Any]]:
         limit = max(1, min(100, int(limit)))
         offset = max(0, int(offset))
         base_columns = (
@@ -709,16 +804,22 @@ class MySQLSchematicStore:
             "`size_x`, `size_y`, `size_z`, `block_count`, `non_air_count`, `palette_count`, "
             "`includes_air`, `compressed_bytes`, `created_at`, `updated_at`"
         )
+        base_columns = ", ".join(f"s.{column.strip()}" for column in base_columns.split(","))
+        base_columns += ", COALESCE(m.`category`, '') AS `category`"
         params: list[Any] = [self.settings.namespace]
-        where = "`namespace`=%s AND `deleted_at` IS NULL"
+        where = "s.`namespace`=%s AND s.`deleted_at` IS NULL"
+        if category is not None:
+            where += " AND COALESCE(m.`category`, '')=%s"
+            params.append(normalize_category_name(category))
         if search.strip():
             where += " AND (`name` LIKE %s OR `display_name` LIKE %s OR `description` LIKE %s)"
             pattern = f"%{search.strip()}%"
             params.extend((pattern, pattern, pattern))
         params.extend((limit, offset))
         sql = (
-            f"SELECT {base_columns} FROM `{self.table}` WHERE {where} "
-            "ORDER BY `updated_at` DESC LIMIT %s OFFSET %s"
+            f"SELECT {base_columns} FROM `{self.table}` s "
+            f"LEFT JOIN `{self.membership_table}` m ON m.`schematic_id`=s.`id` WHERE {where} "
+            "ORDER BY s.`updated_at` DESC, s.`id` DESC LIMIT %s OFFSET %s"
         )
         with self._connection() as connection:
             with connection.cursor() as cursor:
@@ -734,12 +835,16 @@ class MySQLSchematicStore:
             with self._connection(autocommit=False) as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(
-                        f"SELECT `id` FROM `{self.table}` WHERE `namespace`=%s AND `name`=%s LIMIT 1",
+                        f"SELECT `id` FROM `{self.table}` WHERE `namespace`=%s AND `name`=%s LIMIT 1 FOR UPDATE",
                         (self.settings.namespace, normalized),
                     )
                     row = cursor.fetchone()
                     if not row:
                         raise SchematicNotFound(f"schematic '{name}' was not found")
+                    cursor.execute(
+                        f"DELETE FROM `{self.membership_table}` WHERE `schematic_id`=%s",
+                        (int(row["id"]),),
+                    )
                     cursor.execute(
                         f"DELETE FROM `{self.chunk_table}` WHERE `schematic_id`=%s",
                         (int(row["id"]),),

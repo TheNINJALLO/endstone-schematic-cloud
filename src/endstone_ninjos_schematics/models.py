@@ -172,6 +172,8 @@ class SaveJob:
     size: tuple[int, int, int]
     total_volume: int
     regions: tuple[ChunkRegion, ...]
+    category: str | None = None
+    ticket_verified_tick: int | None = None
     cursor: int = 0
     region_index: int = 0
     region_cursor: int = 0

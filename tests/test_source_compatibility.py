@@ -15,5 +15,5 @@ def test_build_marker_is_present():
         / "endstone_ninjos_schematics"
         / "plugin.py"
     ).read_text(encoding="utf-8")
-    assert 'PLUGIN_VERSION = "1.7.3"' in plugin_source
-    assert 'BUILD_ID = "blockdata-startup-retry-20260913"' in plugin_source
+    assert 'PLUGIN_VERSION = "1.8.0"' in plugin_source
+    assert 'BUILD_ID = "categories-chunk-safety-20260919"' in plugin_source

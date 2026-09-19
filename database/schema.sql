@@ -1,4 +1,4 @@
--- Ninj-OS Schematics 1.7.0
+-- Ninj-OS Schematics 1.8.0
 -- Replace `ninjos_schematics` and `ninjos_schematic_payload_chunks` below if
 -- your config uses a different table_prefix.
 
@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS `ninjos_schematics` (
     KEY `idx_namespace_updated` (`namespace`, `updated_at`),
     KEY `idx_namespace_deleted` (`namespace`, `deleted_at`),
     KEY `idx_hash` (`content_sha256`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Additive category migration. Existing saves have no membership and appear as
+-- Uncategorized. Names remain unique per namespace, across all categories.
+CREATE TABLE IF NOT EXISTS `ninjos_schematic_categories` (
+    `namespace` VARCHAR(64) NOT NULL,
+    `name` VARCHAR(64) NOT NULL,
+    PRIMARY KEY (`namespace`, `name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `ninjos_schematic_categories_members` (
+    `schematic_id` BIGINT UNSIGNED NOT NULL,
+    `category` VARCHAR(64) NOT NULL,
+    PRIMARY KEY (`schematic_id`),
+    KEY `idx_category` (`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Large compressed payloads are split into packet-safe MEDIUMBLOB rows. Existing

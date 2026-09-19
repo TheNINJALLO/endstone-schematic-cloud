@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0 - 2026-09-19
+
+- Added shared categories, save destination selection, moving existing saves, and paginated category/library menus and commands. Existing saves remain intact under Uncategorized; omitted destinations preserve categories on overwrite.
+- Added two tables through an additive schema upgrade. Category assignment and payload saves commit together; moves never rewrite block payloads.
+- Added a shared 5 ms scan budget, rotating builder scheduling, and small BlockData capture batches.
+- Require positive chunk residency, including the loaded flag on enumerated chunks when available. Discard and retry source regions if a chunk loses residency between ticks; stop unverified partial pastes while retaining available undo.
+- Prefer native plugin tickets and reference-count native holds across jobs, so one job cannot release another job's chunk. Cache positively held legacy source chunks briefly with fresh completion checks.
+- Lower the default adaptive client update ceiling from 1,200 to 256. Migrate that prior shipped value while preserving other custom limits and fixed pacing.
+- Added real MariaDB tests for schema upgrades, inline/chunked payload preservation, namespace isolation, pagination, and atomic rollback; added form and chunk/pacing regressions.
+
 ## 1.7.3 - 2026-09-13
 
 - Added the native `blockdata_api` plugin as an optional load dependency.

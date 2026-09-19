@@ -62,14 +62,14 @@ def chunk_loaded_state(dimension: Any, chunk_x: int, chunk_z: int) -> bool | Non
         loaded_chunks = None
     if loaded_chunks is not None:
         try:
-            for chunk in list(loaded_chunks):
+            for chunk in loaded_chunks:
                 try:
                     x = int(getattr(chunk, "x"))
                     z = int(getattr(chunk, "z"))
                 except (AttributeError, RuntimeError, TypeError, ValueError):
                     continue
                 if x == int(chunk_x) and z == int(chunk_z):
-                    return True
+                    return bool(getattr(chunk, "is_loaded", True))
             return False
         except (RuntimeError, TypeError):
             pass

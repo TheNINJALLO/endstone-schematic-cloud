@@ -44,6 +44,7 @@ def test_hard_delete_removes_chunk_rows_and_main_row_for_current_namespace():
     store = object.__new__(MySQLSchematicStore)
     store.table = "ninjos_schematics"
     store.chunk_table = "ninjos_schematic_payload_chunks"
+    store.membership_table = "ninjos_schematic_categories_members"
     store.settings = SimpleNamespace(namespace="global")
 
     @contextmanager
@@ -56,10 +57,14 @@ def test_hard_delete_removes_chunk_rows_and_main_row_for_current_namespace():
     assert cursor.calls[0][0].startswith("SELECT `id` FROM `ninjos_schematics`")
     assert cursor.calls[0][1] == ("global", "castle-gate")
     assert cursor.calls[1] == (
-        "DELETE FROM `ninjos_schematic_payload_chunks` WHERE `schematic_id`=%s",
+        "DELETE FROM `ninjos_schematic_categories_members` WHERE `schematic_id`=%s",
         (42,),
     )
     assert cursor.calls[2] == (
+        "DELETE FROM `ninjos_schematic_payload_chunks` WHERE `schematic_id`=%s",
+        (42,),
+    )
+    assert cursor.calls[3] == (
         "DELETE FROM `ninjos_schematics` WHERE `id`=%s",
         (42,),
     )

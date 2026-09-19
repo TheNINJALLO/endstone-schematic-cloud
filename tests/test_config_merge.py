@@ -4,7 +4,7 @@ import pytest
 
 
 @pytest.mark.parametrize("old_limit, adaptive, expected", [
-    (256, True, 1200), (128, True, 128), (1200, True, 1200), (256, False, 256),
+    (256, True, 256), (128, True, 128), (1200, True, 256), (1200, False, 1200),
 ])
 def test_plugin_migrates_legacy_paste_limit_but_preserves_custom_settings(old_limit, adaptive, expected):
     from types import SimpleNamespace

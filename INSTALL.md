@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.7.3 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.8.0 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.7.3-py3-none-any.whl
+endstone_ninjos_schematics-1.8.0-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,12 +23,12 @@ endstone_ninjos_schematics-1.7.3-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.7.3 build=blockdata-startup-retry-20260913
+Enabled v1.8.0 build=categories-chunk-safety-20260919
 ```
 
-This upgrade adds optional BlockData load ordering, automatic connection retries, and clearer native-service diagnostics. No database, configuration, or add-on change is required when upgrading from v1.7.2.
+This upgrade adds shared storage categories and stronger save/paste chunk checks. With `database.auto_create_schema = true`, startup creates two category tables without changing existing saves or payloads. If automatic schema creation is disabled, run the updated `database/schema.sql` first, adjusting every table prefix to match the configuration. Existing entries appear in Uncategorized. Update all servers that share the library before using category features. Existing add-on packs remain compatible.
 
-Upgrades from v1.7.1 also receive `performance.paste_adaptive_pacing = true` and migrate the old default change limit from 256 to 1,200. Adaptive pacing starts at 256, increases on healthy ticks, and backs off on lag. Other custom change limits are preserved; disabling adaptive pacing also preserves a fixed 256 limit. Keep the 10 ms paste time budget. `/schem status` shows records/sec, chunk-check and placement times, wait ticks, and current/maximum change limits.
+Existing configurations receive `performance.scan_time_budget_ms = 5`. The old adaptive default of 1,200 changed blocks per tick is lowered to 256 to reduce client update bursts. Other custom limits and limits with adaptive pacing disabled are preserved. Keep the 10 ms paste budget. `/schem status` shows scan destination and limits as well as paste throughput, timings, and chunk waits. Unknown chunk residency now stops progress until the chunk is positively confirmed loaded.
 
 ## Optional BlockData retention
 
@@ -55,7 +55,7 @@ max_uncompressed_mb = 64
 
 `strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
 
-Existing NSCM v1 rows remain readable. v1.7.3 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
+Existing NSCM v1 rows remain readable. v1.8.0 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 
