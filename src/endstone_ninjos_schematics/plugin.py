@@ -14,6 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
+from textwrap import wrap
 from time import monotonic
 from typing import Any, Callable
 
@@ -72,8 +73,8 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.8.0"
-BUILD_ID = "categories-chunk-safety-20260919"
+PLUGIN_VERSION = "1.8.1"
+BUILD_ID = "canonical-paste-verification-20260920"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 
@@ -1327,6 +1328,22 @@ class NinjOSSchematicsPlugin(Plugin):
                             f"missing-block fallback {desired_type} is not available: {exc}"
                         ) from exc
 
+                # The destination registry supplies canonical identifiers and a full
+                # state map, including defaults omitted from an older/partial palette.
+                # Verify the BlockData we actually resolved, not the source spelling.
+                # Cache this per palette entry: reading native states on every record
+                # would add unnecessary main-thread work to large pastes.
+                if missing_substitution:
+                    desired_type = self.block_data_identifier(block_data)
+                    desired_states = dict(block_data.block_states)
+                else:
+                    if palette_index not in job.palette_targets:
+                        job.palette_targets[palette_index] = (
+                            self.block_data_identifier(block_data),
+                            dict(block_data.block_states),
+                        )
+                    desired_type, desired_states = job.palette_targets[palette_index]
+
                 base_matches = current_type == desired_type and (
                     not require_exact_states or current_states == desired_states
                 )
@@ -1363,6 +1380,7 @@ class NinjOSSchematicsPlugin(Plugin):
                         state_fallback = True
                         job.palette_modes[palette_index] = "type_only"
                         job.palette_data.pop(palette_index, None)
+                        job.palette_targets.pop(palette_index, None)
 
                 if state_fallback:
                     job.state_fallbacks += 1
@@ -1378,7 +1396,7 @@ class NinjOSSchematicsPlugin(Plugin):
                 if verify_writes and not verified and require_exact_states:
                     # One immediate retry handles a transient block update without advancing the cursor.
                     target.set_data(
-                        self.server.create_block_data(desired_type, desired_states),
+                        block_data,
                         apply_physics=self._apply_physics,
                     )
                     after = target.data
@@ -1728,12 +1746,18 @@ class NinjOSSchematicsPlugin(Plugin):
         missing_note = self._missing_block_note(job)
         self._log_missing_blocks(job)
         if player:
-            suffix = ""
+            # Long expected/actual state dictionaries exceed a readable chat line.
+            # Keep diagnostics bounded and put undo availability on its own line.
+            player.send_error_message(f"Schematic {job.operation} failed:")
+            for line in wrap(
+                f"{reason}.{missing_note}", width=180, max_lines=6,
+                placeholder=" ... Full details are in the server console.",
+            ):
+                player.send_error_message(line)
             if partial is not None:
-                suffix = f" A partial undo was saved for {partial.block_count:,} changed blocks."
-            player.send_error_message(
-                f"Schematic {job.operation} failed: {reason}.{missing_note}{suffix}"
-            )
+                player.send_error_message(
+                    f"A partial undo was saved for {partial.block_count:,} changed blocks. Use /schem undo."
+                )
         self.logger.error(f"{job.operation.title()} '{job.name}' failed: {reason}")
 
     def _dispatch_console_command(self, command_line: str) -> bool:

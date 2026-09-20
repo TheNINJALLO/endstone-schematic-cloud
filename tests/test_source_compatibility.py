@@ -15,5 +15,5 @@ def test_build_marker_is_present():
         / "endstone_ninjos_schematics"
         / "plugin.py"
     ).read_text(encoding="utf-8")
-    assert 'PLUGIN_VERSION = "1.8.0"' in plugin_source
-    assert 'BUILD_ID = "categories-chunk-safety-20260919"' in plugin_source
+    assert 'PLUGIN_VERSION = "1.8.1"' in plugin_source
+    assert 'BUILD_ID = "canonical-paste-verification-20260920"' in plugin_source

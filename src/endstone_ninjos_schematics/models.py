@@ -289,6 +289,7 @@ class PasteJob:
     block_entity_failures: int = 0
     palette_modes: dict[int, str] = field(default_factory=dict)
     palette_data: dict[int, Any] = field(default_factory=dict)
+    palette_targets: dict[int, tuple[str, dict[str, Any]]] = field(default_factory=dict)
     missing_type_counts: dict[str, int] = field(default_factory=dict)
     started_tick: int = 0
     last_progress_tick: int = 0

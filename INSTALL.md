@@ -1,4 +1,4 @@
-# Ninj-OS Schematic Cloud v1.8.0 Installation and Upgrade
+# Ninj-OS Schematic Cloud v1.8.1 Installation and Upgrade
 
 ## Clean wheel upgrade
 
@@ -8,7 +8,7 @@
 4. Upload only:
 
 ```text
-endstone_ninjos_schematics-1.8.0-py3-none-any.whl
+endstone_ninjos_schematics-1.8.1-py3-none-any.whl
 ```
 
 5. Keep the existing plugin data folder, database, and `config.toml`.
@@ -23,12 +23,18 @@ endstone_ninjos_schematics-1.8.0-py3-none-any.whl
 The startup log must contain:
 
 ```text
-Enabled v1.8.0 build=categories-chunk-safety-20260919
+Enabled v1.8.1 build=canonical-paste-verification-20260920
 ```
 
 This upgrade adds shared storage categories and stronger save/paste chunk checks. With `database.auto_create_schema = true`, startup creates two category tables without changing existing saves or payloads. If automatic schema creation is disabled, run the updated `database/schema.sql` first, adjusting every table prefix to match the configuration. Existing entries appear in Uncategorized. Update all servers that share the library before using category features. Existing add-on packs remain compatible.
 
 Existing configurations receive `performance.scan_time_budget_ms = 5`. The old adaptive default of 1,200 changed blocks per tick is lowered to 256 to reduce client update bursts. Other custom limits and limits with adaptive pacing disabled are preserved. Keep the 10 ms paste budget. `/schem status` shows scan destination and limits as well as paste throughput, timings, and chunk waits. Unknown chunk residency now stops progress until the chunk is positively confirmed loaded.
+
+## v1.8.1 paste-verification fix
+
+This patch accepts the destination registry's canonical block names and complete state maps, including default states missing from older palettes. It retains strict readback, chunk-residency checks and partial undo on genuine failures. Keep `verify_paste_writes = true` and `max_paste_failures = 0`. Existing cloud saves, categories, configuration and add-on packs remain compatible; no additional schema migration is introduced by this patch.
+
+If an earlier paste stopped, restore its available partial undo before repeating the paste when practical. Failure details now appear in bounded chat lines and remain complete in the server console. [Validation record](docs/validation-1.8.1.md).
 
 ## Optional BlockData retention
 
@@ -55,7 +61,7 @@ max_uncompressed_mb = 64
 
 `strict_restore = true` stops a paste when saved metadata cannot be restored and preserves partial undo history. The size limit prevents an unusually metadata-heavy selection from consuming unbounded memory; raise it only when the server has enough headroom.
 
-Existing NSCM v1 rows remain readable. v1.8.0 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
+Existing NSCM v1 rows remain readable. v1.8.1 creates NSCM v2 payloads, so update all schematic-cloud servers before they consume newly saved entries.
 
 ## Automatically merged streaming settings
 

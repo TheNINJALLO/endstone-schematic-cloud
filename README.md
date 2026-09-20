@@ -70,7 +70,7 @@ flowchart LR
 | Minecraft Bedrock / BDS | `26.x` |
 | Python | `3.10+` |
 | Database | MySQL `8.0+` or MariaDB `10.5+` |
-| Plugin release | `v1.8.0` |
+| Plugin release | `v1.8.1` |
 | Block metadata | Optional matching [`endstone-blockdata`](https://github.com/TheNINJALLO/endstone-blockdata-api) release |
 
 ### 1. Download and install
@@ -78,7 +78,7 @@ flowchart LR
 Download the latest wheel from [GitHub Releases](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/latest), or use the GitHub CLI:
 
 ```bash
-gh release download v1.8.0 \
+gh release download v1.8.1 \
   --repo TheNINJALLO/endstone-schematic-cloud \
   --pattern "*.whl"
 ```
@@ -154,7 +154,7 @@ Restart Endstone and run:
 The startup log for this release contains:
 
 ```text
-Enabled v1.8.0 build=categories-chunk-safety-20260919
+Enabled v1.8.1 build=canonical-paste-verification-20260920
 ```
 
 If BlockData is installed, startup also reports its API version and active adapter. `/schem status` shows `BlockData retention: Ready`.
@@ -283,7 +283,7 @@ Typed NBT byte, short, long, and float values are preserved. Metadata coordinate
 The integration is optional for ordinary blocks. If it is unavailable, block types and states still save and paste normally. A schematic that actually contains retained metadata requires BlockData on the destination while strict restoration is enabled.
 
 > [!IMPORTANT]
-> NSCM v1 cloud rows and backups remain readable in v1.8.0. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
+> NSCM v1 cloud rows and backups remain readable in v1.8.1. New saves use NSCM v2; update every connected schematic server before sharing newly saved v2 entries.
 
 ### Use the optional in-game tools
 
@@ -425,9 +425,17 @@ Available policies:
 
 Exact restoration requires the same behavior packs and block identifiers on source and destination servers.
 
+## Paste verification troubleshooting
+
+v1.8.1 fixes false `write verification failed` errors caused by older or partial block palettes. Endstone can resolve a saved block name to its current name (for example, `minecraft:grass` to `minecraft:grass_block`) and add default states. The plugin now compares the actual world block with that resolved block data, preserving strict orientation/state checks for the resolved target. It caches that target per palette entry and uses it for unchanged-block checks and retries.
+
+Keep `verify_paste_writes = true` and `max_paste_failures = 0`. Genuinely missing writes or incorrect states still stop the paste; disabling verification can hide incomplete builds. Errors are split into shorter chat messages, and the server console retains the full expected/actual state comparison. If a paste already stopped, use `/schem undo` when partial history was saved, upgrade while the server is stopped, then retry the schematic.
+
+An isolated Endstone 0.11.11 / BDS 1.26.51.1 test reproduced eight false failures in ten representative block cases before this fix. See [validation](docs/validation-1.8.1.md) for the final wheel checks and limits. The exact block in a truncated player report still requires its full server-console error.
+
 ## Large schematic safety
 
-v1.8.0 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
+v1.8.1 combines record, changed-block, and wall-clock limits. Streaming plans visit each destination chunk once, even when a chunk's records cross planning batches.
 
 ```toml
 [performance]

@@ -1,0 +1,190 @@
+{
+  "version": "1.8.1",
+  "plugin_source_sha256": "12b53700afde938db7e3efabc0f45c9c4621eca657b163de371edf27f27ea61e",
+  "checks": [
+    {
+      "requested_type": "minecraft:stone",
+      "requested_states": {},
+      "resolved_type": "minecraft:stone",
+      "resolved_states": {},
+      "passed": true,
+      "actual_type": "minecraft:stone",
+      "actual_states": {},
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:oak_stairs",
+      "requested_states": {},
+      "resolved_type": "minecraft:oak_stairs",
+      "resolved_states": {
+        "minecraft:corner": "none",
+        "upside_down_bit": false,
+        "weirdo_direction": 0
+      },
+      "passed": true,
+      "actual_type": "minecraft:oak_stairs",
+      "actual_states": {
+        "minecraft:corner": "none",
+        "upside_down_bit": false,
+        "weirdo_direction": 0
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:oak_stairs",
+      "requested_states": {
+        "weirdo_direction": 2
+      },
+      "resolved_type": "minecraft:oak_stairs",
+      "resolved_states": {
+        "minecraft:corner": "none",
+        "upside_down_bit": false,
+        "weirdo_direction": 2
+      },
+      "passed": true,
+      "actual_type": "minecraft:oak_stairs",
+      "actual_states": {
+        "minecraft:corner": "none",
+        "upside_down_bit": false,
+        "weirdo_direction": 2
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:chest",
+      "requested_states": {},
+      "resolved_type": "minecraft:chest",
+      "resolved_states": {
+        "minecraft:cardinal_direction": "north"
+      },
+      "passed": true,
+      "actual_type": "minecraft:chest",
+      "actual_states": {
+        "minecraft:cardinal_direction": "north"
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:grass",
+      "requested_states": {},
+      "resolved_type": "minecraft:grass_block",
+      "resolved_states": {},
+      "passed": true,
+      "actual_type": "minecraft:grass_block",
+      "actual_states": {},
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:wooden_door",
+      "requested_states": {},
+      "resolved_type": "minecraft:wooden_door",
+      "resolved_states": {
+        "door_hinge_bit": false,
+        "minecraft:cardinal_direction": "south",
+        "upper_block_bit": false,
+        "open_bit": false
+      },
+      "passed": true,
+      "actual_type": "minecraft:wooden_door",
+      "actual_states": {
+        "door_hinge_bit": false,
+        "minecraft:cardinal_direction": "south",
+        "upper_block_bit": false,
+        "open_bit": false
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:water",
+      "requested_states": {},
+      "resolved_type": "minecraft:water",
+      "resolved_states": {
+        "liquid_depth": 0
+      },
+      "passed": true,
+      "actual_type": "minecraft:water",
+      "actual_states": {
+        "liquid_depth": 0
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:torch",
+      "requested_states": {},
+      "resolved_type": "minecraft:torch",
+      "resolved_states": {
+        "torch_facing_direction": "unknown"
+      },
+      "passed": true,
+      "actual_type": "minecraft:torch",
+      "actual_states": {
+        "torch_facing_direction": "unknown"
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:oak_log",
+      "requested_states": {
+        "pillar_axis": "x"
+      },
+      "resolved_type": "minecraft:oak_log",
+      "resolved_states": {
+        "pillar_axis": "x"
+      },
+      "passed": true,
+      "actual_type": "minecraft:oak_log",
+      "actual_states": {
+        "pillar_axis": "x"
+      },
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    },
+    {
+      "requested_type": "minecraft:stone",
+      "requested_states": {
+        "stone_type": "granite"
+      },
+      "resolved_type": "minecraft:granite",
+      "resolved_states": {},
+      "passed": true,
+      "actual_type": "minecraft:granite",
+      "actual_states": {},
+      "captured_blocks": 1,
+      "unchanged_skipped": true,
+      "undo_passed": true,
+      "redo_passed": true
+    }
+  ],
+  "wheel_sha256": "dc0e52f87c42c1d7e160ca4b797ceff8fafc319a0244b08cdc709242eb59ac62",
+  "server_exit": 0,
+  "platform": "win32",
+  "endstone": "0.11.11",
+  "bds": "1.26.51.1",
+  "date": "2026-09-20"
+}

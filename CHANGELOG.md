@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.1 - 2026-09-20
+
+- Fixed false paste verification failures when Endstone resolves legacy block names or fills default states omitted by saved palettes.
+- Cache the resolved type and complete states per palette entry; use the same resolved data for unchanged checks and retries without rewriting saved palettes.
+- Preserve strict detection of ignored writes and wrong orientations, available partial undo, chunk checks and pacing limits.
+- Split paste failure details into bounded chat messages while retaining the full server-console error.
+- Added regressions and real BDS before/after block-write validation; see `docs/validation-1.8.1.md`.
+
 ## 1.8.0 - 2026-09-19
 
 - Added shared categories, save destination selection, moving existing saves, and paginated category/library menus and commands. Existing saves remain intact under Uncategorized; omitted destinations preserve categories on overwrite.
