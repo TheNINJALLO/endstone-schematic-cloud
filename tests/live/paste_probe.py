@@ -52,9 +52,22 @@ class Probe(NinjOSSchematicsPlugin):
                 ('minecraft:oak_log', {'pillar_axis': 'x'}),
                 ('minecraft:stone', {'stone_type': 'granite'}),
             ]
+            cases.extend(
+                (kind, {'liquid_depth': depth})
+                for kind in ('minecraft:lava', 'minecraft:flowing_lava',
+                             'minecraft:water', 'minecraft:flowing_water')
+                for depth in range(16)
+            )
+            self.expected_case_count = len(cases)
             for index, (kind, states) in enumerate(cases):
-                pos = BlockPos(index, 90, 0)
+                pos = BlockPos((index % 4) * 4 + 1, 90 + (index // 4) * 4, 1)
                 dim.get_block_at(pos.x, pos.y - 1, pos.z).set_type('minecraft:stone', apply_physics=False)
+                if 'liquid_depth' in states:
+                    # Contain each sample so adjacent liquids and scheduled flow
+                    # cannot turn an unrelated case into cobblestone or obsidian.
+                    for dx, dy, dz in ((-1, 0, 0), (1, 0, 0), (0, -1, 0),
+                                       (0, 1, 0), (0, 0, -1), (0, 0, 1)):
+                        dim.get_block_at(pos.x + dx, pos.y + dy, pos.z + dz).set_type('minecraft:stone', apply_physics=False)
                 block = dim.get_block_at(pos.x, pos.y, pos.z)
                 block.set_type('minecraft:air', apply_physics=False)
                 record = bytearray()
@@ -74,7 +87,7 @@ class Probe(NinjOSSchematicsPlugin):
                 result['actual_states'] = dict(block.data.block_states)
                 result['captured_blocks'] = job.captured_blocks
                 if result.get('passed'):
-                    expected = (result['resolved_type'], result['resolved_states'])
+                    expected = (result['actual_type'], result['actual_states'])
                     unchanged = PasteJob('probe', kind, plan, 'Overworld', pos, 0)
                     self._paste_batch(unchanged, dim, 1)
                     result['unchanged_skipped'] = unchanged.skipped == 1 and unchanged.write_attempts == 0
@@ -93,5 +106,5 @@ class Probe(NinjOSSchematicsPlugin):
 
     def finish(self):
         self.task.cancel()
-        Path(os.environ['SCHEM_PROBE_OUTPUT']).write_text(json.dumps({'version': PLUGIN_VERSION, 'plugin_source_sha256': hashlib.sha256(Path(__import__('endstone_ninjos_schematics.plugin', fromlist=['__file__']).__file__).read_bytes()).hexdigest(), 'checks': self.results}, indent=2))
+        Path(os.environ['SCHEM_PROBE_OUTPUT']).write_text(json.dumps({'version': PLUGIN_VERSION, 'plugin_source_sha256': hashlib.sha256(Path(__import__('endstone_ninjos_schematics.plugin', fromlist=['__file__']).__file__).read_bytes()).hexdigest(), 'expected_case_count': getattr(self, 'expected_case_count', 0), 'checks': self.results}, indent=2))
         self.logger.info('SCHEM_PROBE_COMPLETE')

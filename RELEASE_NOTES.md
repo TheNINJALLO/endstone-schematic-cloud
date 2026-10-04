@@ -1,19 +1,19 @@
-# Release Notes: v1.8.1
+# Release Notes: v1.8.2
 
-Fixes false `paste verification stopped ... write verification failed` errors when Endstone resolves an older block name or supplies default states absent from a saved palette. For example, `minecraft:grass` resolves to `minecraft:grass_block`, and stairs/chests receive their current complete state maps. The old verifier could reject these correctly placed blocks.
+Fixes a reproduced false paste failure where `minecraft:flowing_lava {'liquid_depth': 0}` reads back as `minecraft:lava {'liquid_depth': 0}`. The same issue affects flowing water and other liquid depths. Registry resolution alone did not fix this because `create_block_data` preserves the flowing name while the placed world block uses the still name.
 
-The verifier now compares the world block with Endstone's resolved target. That target is cached per palette entry and reused for unchanged checks and retries. Saved palettes are not rewritten. Ignored writes and wrong resolved orientations still fail; chunk-residency checks, time/change budgets and partial undo remain active. Failure details are split into shorter chat messages, with the complete comparison retained in the server console.
+Paste verification now treats only the vanilla lava/flowing-lava and water/flowing-water name pairs as equivalent, while comparing their complete states exactly. This comparison also applies to unchanged-block checks and retries. Wrong depths, wrong materials, custom namespaces and ignored writes still fail. Saved palettes remain unchanged; undo/redo retains the actual world block identifiers and states.
 
 ## Upgrade
 
 If an earlier paste stopped and partial undo is available, use `/schem undo` before shutting down when you need to restore the destination. Undo history does not survive a restart.
 
-Stop Endstone, remove the older schematic wheel, install `endstone_ninjos_schematics-1.8.1-py3-none-any.whl`, and restart. `/schem version` should report build `canonical-paste-verification-20260920`.
+Stop Endstone, remove older schematic wheels, install `endstone_ninjos_schematics-1.8.2-py3-none-any.whl`, and restart. `/schem version` should report build `fluid-paste-verification-20261003`.
 
 Keep existing saves, categories, configuration and add-on packs. This patch adds no database schema changes. Keep `verify_paste_writes = true` and `max_paste_failures = 0`; disabling verification can hide genuinely incomplete pastes.
 
 ## Validation
 
-All **142 automated tests passed**, including six real MariaDB integration cases. An isolated Windows Endstone 0.11.11 / BDS 1.26.51.1 run reproduced eight false failures across ten representative block cases before the fix. The packaged v1.8.1 wheel passed all ten cases, including placement, unchanged-block skipping, undo and redo.
+**226 automated tests passed**; six database integration cases were skipped because no disposable database was configured. The 90 new liquid regressions cover both alias directions, every depth, retries, unchanged checks, undo/redo and strict failures. An isolated Windows Endstone 0.11.11 / BDS 1.26.51.1 run reproduced 32 false flowing-liquid failures in v1.8.1. The packaged v1.8.2 wheel passed all **74 real-server cases**, including placement, unchanged-block skipping, undo and redo.
 
-See the [validation record](https://github.com/TheNINJALLO/endstone-schematic-cloud/blob/main/docs/validation-1.8.1.md) for reproducible checks, wheel hashes and exact scope. This does not prove every retail-client/custom-pack interaction or diagnose the exact block in a truncated player report. If a paste still fails, capture the complete expected/actual error from the server console.
+See the [validation record](https://github.com/TheNINJALLO/endstone-schematic-cloud/blob/v1.8.2/docs/validation-1.8.2.md) for reproduction commands, wheel hashes and scope. The player's complete schematic and production world were not part of the isolated run.

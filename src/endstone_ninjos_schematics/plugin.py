@@ -73,10 +73,14 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.8.1"
-BUILD_ID = "canonical-paste-verification-20260920"
+PLUGIN_VERSION = "1.8.2"
+BUILD_ID = "fluid-paste-verification-20261003"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
+_LIQUID_TYPE_ALIASES = {
+    "minecraft:flowing_lava": "minecraft:lava",
+    "minecraft:flowing_water": "minecraft:water",
+}
 
 
 class NinjOSSchematicsPlugin(Plugin):
@@ -1227,6 +1231,24 @@ class NinjOSSchematicsPlugin(Plugin):
             f"block record(s) under policy '{self._missing_block_policy}': {details}"
         )
 
+    @staticmethod
+    def _paste_block_matches(
+        actual_type: str,
+        actual_states: dict[str, Any],
+        desired_type: str,
+        desired_states: dict[str, Any],
+        require_exact_states: bool = True,
+    ) -> bool:
+        # BDS can read back a flowing liquid as its still-name counterpart even
+        # when create_block_data preserves the requested name. Only these two
+        # vanilla liquid pairs are equivalent; depth and other states stay exact.
+        if actual_type != desired_type and (
+            _LIQUID_TYPE_ALIASES.get(actual_type, actual_type)
+            != _LIQUID_TYPE_ALIASES.get(desired_type, desired_type)
+        ):
+            return False
+        return not require_exact_states or actual_states == desired_states
+
     def _paste_batch(
         self,
         job: PasteJob,
@@ -1344,8 +1366,9 @@ class NinjOSSchematicsPlugin(Plugin):
                         )
                     desired_type, desired_states = job.palette_targets[palette_index]
 
-                base_matches = current_type == desired_type and (
-                    not require_exact_states or current_states == desired_states
+                base_matches = self._paste_block_matches(
+                    current_type, current_states, desired_type, desired_states,
+                    require_exact_states,
                 )
                 # Most full-volume pastes contain large stretches of unchanged air.
                 # They need neither an undo snapshot nor a native BlockData capture.
@@ -1389,8 +1412,9 @@ class NinjOSSchematicsPlugin(Plugin):
                 after_type = self.block_data_identifier(after)
                 after_states = dict(after.block_states)
                 changed = current_type != after_type or current_states != after_states
-                verified = after_type == desired_type and (
-                    not require_exact_states or after_states == desired_states
+                verified = self._paste_block_matches(
+                    after_type, after_states, desired_type, desired_states,
+                    require_exact_states,
                 )
 
                 if verify_writes and not verified and require_exact_states:
@@ -1403,7 +1427,9 @@ class NinjOSSchematicsPlugin(Plugin):
                     after_type = self.block_data_identifier(after)
                     after_states = dict(after.block_states)
                     changed = current_type != after_type or current_states != after_states
-                    verified = after_type == desired_type and after_states == desired_states
+                    verified = self._paste_block_matches(
+                        after_type, after_states, desired_type, desired_states
+                    )
 
                 blockdata_error = ""
                 if verified and desired_entity is not None:

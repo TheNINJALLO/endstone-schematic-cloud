@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.2 - 2026-10-03
+
+- Fixed false paste verification failures when flowing lava or water reads back under its still-liquid name with identical states.
+- Apply the same liquid comparison to unchanged-block checks, placement and retries while retaining exact depth/state verification and rejecting wrong materials or ignored writes.
+- Keep saved palettes unchanged and retain actual world identifiers/states in undo and redo history.
+- Added liquid regressions and expanded the isolated BDS probe to all 16 depths for both names of lava and water; see `docs/validation-1.8.2.md`.
+
 ## 1.8.1 - 2026-09-20
 
 - Fixed false paste verification failures when Endstone resolves legacy block names or fills default states omitted by saved palettes.

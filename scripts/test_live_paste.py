@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from zipfile import ZipFile
 
 
@@ -56,9 +57,10 @@ def main():
         'import os,sys\nsys.path[:]=[p for p in sys.path if "site-packages" not in p.lower() or p.lower().startswith(os.environ["SCHEM_PROBE_PREFIX"].lower())]\n'
     )
     (server / "plugins").mkdir(exist_ok=True)
+    level_name = f"schem-test-{uuid.uuid4().hex}"
     (server / "server.properties").write_text(
         "server-name=Schematic isolated paste test\nserver-port=39411\nserver-portv6=39412\n"
-        "online-mode=true\nallow-list=true\nallow-cheats=true\nlevel-name=schem-test\nlevel-type=FLAT\n"
+        f"online-mode=true\nallow-list=true\nallow-cheats=true\nlevel-name={level_name}\nlevel-type=FLAT\n"
         "view-distance=4\ntick-distance=4\nenable-lan-visibility=false\nemit-server-telemetry=false\n"
     )
     (server / "endstone.toml").write_text("[settings]\n")
@@ -109,9 +111,11 @@ def main():
     report["wheel_sha256"] = hashlib.sha256(args.wheel.read_bytes()).hexdigest()
     report["server_exit"] = process.returncode
     report["platform"] = sys.platform
+    report["level_name"] = level_name
     result.write_text(json.dumps(report, indent=2) + "\n")
     checks = report["checks"]
-    passed = len(checks) == 10 and all(all(c.get(k) is True for k in ("passed", "unchanged_skipped", "undo_passed", "redo_passed")) for c in checks)
+    expected_count = report.get("expected_case_count", 0)
+    passed = expected_count > 0 and len(checks) == expected_count and all(all(c.get(k) is True for k in ("passed", "unchanged_skipped", "undo_passed", "redo_passed")) for c in checks)
     print(f"Live paste/unchanged/undo/redo: {'PASS' if passed else 'FAIL'}; {result}")
     if not passed or process.returncode != 0:
         raise SystemExit(1)
