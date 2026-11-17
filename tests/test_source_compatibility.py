@@ -15,5 +15,5 @@ def test_build_marker_is_present():
         / "endstone_ninjos_schematics"
         / "plugin.py"
     ).read_text(encoding="utf-8")
-    assert 'PLUGIN_VERSION = "1.8.2"' in plugin_source
+    assert 'PLUGIN_VERSION = "1.8.3"' in plugin_source
     assert 'BUILD_ID = "fluid-paste-verification-20261003"' in plugin_source

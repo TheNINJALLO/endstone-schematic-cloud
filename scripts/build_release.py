@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 PROJECT = f"NinjOS-Schematic-Cloud-{VERSION}"
 
 CORE_ARTIFACTS = [

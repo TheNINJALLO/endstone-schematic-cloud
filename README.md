@@ -1,3 +1,7 @@
+[Download compatibility release v1.8.3](https://github.com/TheNINJALLO/endstone-schematic-cloud/releases/tag/v1.8.3).
+
+> Compatibility update **1.8.3** targets **Endstone 0.11.16 / BDS 1.26.65.1**, protocol **2225**, Python **3.11+**. API level remains **0.11**. Keep configuration and player data when replacing the wheel. Earlier acceptance records below describe their original builds; current qualification is tracked in the workspace upgrade report.
+
 <!-- endstone-professional-header:start -->
 <p align="center">
   <img src="docs/assets/banner.svg" width="100%" alt="Ninj-OS Schematic Cloud — streamed cross-server blueprints for Minecraft Bedrock">

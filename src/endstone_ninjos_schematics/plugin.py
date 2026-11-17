@@ -73,7 +73,7 @@ from .sponge_schem import (
     encode_sponge_v3,
 )
 
-PLUGIN_VERSION = "1.8.2"
+PLUGIN_VERSION = "1.8.3"
 BUILD_ID = "fluid-paste-verification-20261003"
 _ACTIVE_PLUGIN_INSTANCE: Any | None = None
 AIR_TYPES = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
